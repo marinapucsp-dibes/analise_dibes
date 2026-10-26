@@ -26,8 +26,35 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-O painel abre no navegador (http://localhost:8501). O histórico fica salvo em `dados/dibes.db`
-(SQLite) — faça cópia de segurança desse arquivo. Para usar outro local, defina a variável `DIBES_BANCO`.
+O painel abre no navegador (http://localhost:8501). Sem configuração, o histórico fica salvo em
+`dados/dibes.db` (SQLite) — faça cópia de segurança desse arquivo.
+
+## Publicar na internet (Streamlit Community Cloud + Supabase)
+
+Assim a equipe acessa por um link, sem instalar nada, e o histórico fica num banco na nuvem.
+
+**1. Criar o banco (Supabase, gratuito)**
+1. Crie uma conta em https://supabase.com e clique em **New project** (região: *South America (São Paulo)*).
+   Anote a senha do banco.
+2. No projeto, clique em **Connect** (no topo) e copie a *connection string* do tipo **URI**
+   em **Session pooler**. Troque `[YOUR-PASSWORD]` pela senha anotada.
+   A tabela é criada automaticamente na primeira vez que o painel abrir.
+
+**2. Publicar o painel (Streamlit Community Cloud, gratuito)**
+1. Entre em https://share.streamlit.io com a conta do GitHub.
+2. **Create app** → repositório `analise_dibes`, branch principal, arquivo `app.py`.
+3. Em **Advanced settings → Secrets**, cole (veja `.streamlit/secrets.toml.exemplo`):
+   ```toml
+   DIBES_DATABASE_URL = "postgresql://postgres.xxxx:SUA_SENHA@aws-0-sa-east-1.pooler.supabase.com:5432/postgres"
+   SENHA = "uma-senha-para-a-equipe"
+   ```
+4. **Deploy**. O link fica no formato `https://<nome>.streamlit.app`.
+
+`SENHA` é opcional: se existir, o painel pede a senha antes de abrir. Os *Secrets* nunca devem ir
+para o GitHub (o arquivo `.streamlit/secrets.toml` já está no `.gitignore`).
+
+> Apps gratuitos do Streamlit "dormem" após alguns dias sem acesso; basta abrir o link e clicar em
+> *Yes, get this app back up* (leva cerca de 1 minuto). Os dados ficam no Supabase e não se perdem.
 
 ## Importação dos dados (📥 Importar dados)
 
@@ -59,8 +86,17 @@ O sistema localiza sozinho a linha de cabeçalho e reconhece variações de nome
 - **⚠️ Alertas** — conferência automática: concessão acima da cota, recibos ≠ cestas,
   demanda maior que a cota, concedidas acima do solicitado, unidade sem dados, baixo uso da cota
   e variação forte em relação ao mês anterior.
-- **🗂️ Histórico e relatório** — tabela completa, exclusão de meses/unidades e download do
-  **relatório em Excel** (abas Total SAS, CRAS x CREAS, Por unidade e Alertas) e dos dados em CSV.
+- **🗂️ Histórico e relatório** — **relatório mensal em PDF para impressão**, tabela completa,
+  exclusão de meses/unidades e download do **relatório em Excel** (abas Total SAS, CRAS x CREAS,
+  Por unidade e Alertas) e dos dados em CSV.
+
+### Relatório para impressão (PDF)
+
+Botão **🖨️ Relatório do mês (PDF)** no Painel do mês e em Histórico e relatório. A4 paisagem, com:
+1. Resumo do Total SAS com comparação ao mês anterior e indicadores de SAS, CRAS e CREAS;
+2. Tabela de todas as unidades com subtotais CRAS, CREAS e Total SAS, e gráfico Cota × Demanda × Concedidas;
+3. Evolução dos últimos 12 meses (gráficos e tabela);
+4. Alertas de conferência do mês.
 
 ### Indicadores calculados
 
@@ -84,10 +120,11 @@ A pasta `exemplos/` tem dados **fictícios** de jan–set/2026 em todos os forma
 app.py                 # interface (Streamlit)
 dibes/config.py        # campos e nomes de coluna reconhecidos
 dibes/importador.py    # leitura de Excel, CSV, PDF e HTML
-dibes/banco.py         # histórico mensal (SQLite)
+dibes/banco.py         # histórico mensal (SQLite local ou Postgres/Supabase)
 dibes/analise.py       # totais, indicadores e alertas
 dibes/graficos.py      # gráficos (Plotly)
 dibes/relatorio.py     # relatório em Excel
+dibes/relatorio_pdf.py # relatório mensal em PDF (impressão)
 tests/                 # testes automáticos (pytest)
 ```
 

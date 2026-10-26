@@ -93,3 +93,16 @@ def test_banco_analise_e_relatorio(tmp_path):
     assert {"Total SAS", "CRAS x CREAS", "Por unidade", "Alertas"} <= set(abas)
 
     assert banco.excluir_mes("2026-09", caminho) == 7
+
+
+def test_relatorio_pdf(tmp_path):
+    from dibes import relatorio_pdf
+
+    caminho = tmp_path / "t.db"
+    for f in sorted(EXEMPLOS.iterdir()):
+        banco.salvar(importador.importar_arquivo(f.read_bytes(), f.name).dados, f.name, caminho)
+    df = banco.carregar(caminho)
+    pdf = relatorio_pdf.gerar_pdf(df, "2026-09")
+    assert pdf.startswith(b"%PDF")
+    # o primeiro mês não tem mês anterior nem evolução: também precisa funcionar
+    assert relatorio_pdf.gerar_pdf(df, "2026-01").startswith(b"%PDF")

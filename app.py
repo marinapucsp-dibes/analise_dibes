@@ -5,15 +5,49 @@ Execute com:  streamlit run app.py
 
 from __future__ import annotations
 
+import hmac
+import os
 from datetime import date
 
 import pandas as pd
 import streamlit as st
 
-from dibes import analise, banco, graficos, importador, relatorio
 from dibes.config import CAMPOS, MESES_PT, TIPOS, rotulo_mes
 
 st.set_page_config(page_title="Cestas Básicas · SAS", page_icon="🧺", layout="wide")
+
+
+def segredo(nome: str) -> str | None:
+    """Lê um valor de .streamlit/secrets.toml (ou dos Secrets do Streamlit Cloud)."""
+    try:
+        return st.secrets.get(nome)
+    except Exception:  # nenhum arquivo de secrets configurado
+        return None
+
+
+# Na nuvem, o endereço do banco (Supabase/Neon) vem dos Secrets
+if segredo("DIBES_DATABASE_URL"):
+    os.environ.setdefault("DIBES_DATABASE_URL", segredo("DIBES_DATABASE_URL"))
+
+from dibes import analise, banco, graficos, importador, relatorio, relatorio_pdf  # noqa: E402
+
+
+def exigir_senha():
+    """Se houver SENHA nos Secrets, pede a senha antes de mostrar o painel."""
+    senha = segredo("SENHA")
+    if not senha or st.session_state.get("autenticado"):
+        return
+    st.title("🧺 Cestas Básicas")
+    digitada = st.text_input("Senha de acesso", type="password")
+    if digitada:
+        if hmac.compare_digest(digitada, str(senha)):
+            st.session_state["autenticado"] = True
+            st.rerun()
+        st.error("Senha incorreta.")
+    st.stop()
+
+
+exigir_senha()
 
 
 # ------------------------------------------------------------------ apoio
@@ -35,17 +69,18 @@ def fmt_delta(atual, anterior, pct: bool = False) -> str | None:
     return f"{'+' if atual - anterior > 0 else ''}{base}" + (f" ({fmt(v, 1, '%')})" if v is not None else "")
 
 
-@st.cache_data(show_spinner=False)
-def carregar_dados(_versao: int) -> pd.DataFrame:
+@st.cache_data(show_spinner=False, ttl=60)  # ttl: vê em até 1 min o que outra pessoa importou
+def carregar_dados() -> pd.DataFrame:
     return banco.carregar()
 
 
 def dados() -> pd.DataFrame:
-    return carregar_dados(st.session_state.get("versao", 0))
+    return carregar_dados()
 
 
 def recarregar():
-    st.session_state["versao"] = st.session_state.get("versao", 0) + 1
+    carregar_dados.clear()
+    pdf_do_mes.clear()
 
 
 def seletor_mes(rotulo: str, chave: str, padrao: str | None = None) -> str:
@@ -80,6 +115,18 @@ def serie_do_recorte(df: pd.DataFrame, recorte: str) -> pd.DataFrame:
     return analise.por_unidade(df[df["unidade"] == recorte]).sort_values("mes").reset_index(drop=True)
 
 
+@st.cache_data(show_spinner="Gerando relatório…", ttl=60)
+def pdf_do_mes(mes: str) -> bytes:
+    return relatorio_pdf.gerar_pdf(carregar_dados(), mes)
+
+
+def botao_pdf(mes: str, chave: str):
+    pdf = pdf_do_mes(mes)
+    st.download_button("🖨️ Relatório do mês (PDF)", pdf,
+                       file_name=f"relatorio_cestas_{mes}.pdf", mime="application/pdf",
+                       key=f"pdf_{chave}", width="stretch")
+
+
 def sem_dados():
     st.info("Ainda não há dados no histórico. Vá em **📥 Importar dados** para carregar o primeiro mês.")
     st.stop()
@@ -93,7 +140,7 @@ def tabela_bonita(df: pd.DataFrame) -> pd.DataFrame:
 
 
 CONFIG_NUMEROS = {
-    **{rot: st.column_config.NumberColumn(rot, format="plain") for rot in CAMPOS.values()},
+    **{rot: st.column_config.NumberColumn(rot, format="%.0f") for rot in CAMPOS.values()},
     **{rot: st.column_config.NumberColumn(rot, format="%.1f%%") for k, rot in analise.INDICADORES.items()
        if "%" in rot},
 }
@@ -166,7 +213,7 @@ def pagina_importar():
         return
 
     editado = st.data_editor(
-        previa.dados, num_rows="dynamic", use_container_width=True, hide_index=True, key=f"editor_{id(previa)}",
+        previa.dados, num_rows="dynamic", width="stretch", hide_index=True, key=f"editor_{id(previa)}",
         column_config={
             "mes": st.column_config.TextColumn("Mês (AAAA-MM)", validate=r"^20\d{2}-(0[1-9]|1[0-2])$", required=True),
             "unidade": st.column_config.TextColumn("Unidade", required=True),
@@ -217,7 +264,10 @@ def pagina_painel():
     ant_mes = analise.mes_anterior(serie["mes"].tolist(), mes)
     ant = serie[serie["mes"] == ant_mes].iloc[0] if ant_mes else None
 
-    st.subheader(f"{recorte} · {rotulo_mes(mes)}")
+    c1, c2 = st.columns([3, 1])
+    c1.subheader(f"{recorte} · {rotulo_mes(mes)}")
+    with c2:
+        botao_pdf(mes, "painel")
     if ant_mes:
         st.caption(f"Variações em relação a {rotulo_mes(ant_mes)}.")
     colunas = st.columns(6)
@@ -231,7 +281,7 @@ def pagina_painel():
                    fmt_delta(linha[ind], None if ant is None else ant[ind], pct=pct),
                    delta_color="inverse" if ind == "demanda_reprimida" else "normal", border=True)
 
-    st.plotly_chart(graficos.perfil_mes(linha, "Os seis campos no mês"), use_container_width=True, theme=None)
+    st.plotly_chart(graficos.perfil_mes(linha, "Os seis campos no mês"), width="stretch", theme=None)
 
     st.divider()
     st.subheader(f"CRAS e CREAS em {rotulo_mes(mes)}")
@@ -241,20 +291,20 @@ def pagina_painel():
     campo = c1.selectbox("Campo do ranking", list(opcoes), index=list(opcoes).index("cestas_concedidas"),
                          format_func=opcoes.get)
     c2.plotly_chart(graficos.barras_unidades(df_mes, campo, f"{opcoes[campo]} por unidade"),
-                    use_container_width=True, theme=None)
+                    width="stretch", theme=None)
     comparar = st.multiselect("Comparar por unidade", list(CAMPOS), format_func=CAMPOS.get,
                               default=["cota_disponivel", "demanda_registrada", "cestas_concedidas"])
     if comparar:
-        st.plotly_chart(graficos.comparativo_unidades(df_mes, comparar[:8]), use_container_width=True, theme=None)
+        st.plotly_chart(graficos.comparativo_unidades(df_mes, comparar[:8]), width="stretch", theme=None)
 
     tipos = analise.por_tipo(df[df["mes"] == mes])
     total = analise.total_sas(df[df["mes"] == mes]).assign(tipo="Total SAS").drop(columns="unidades")
     resumo = pd.concat([tipos, total], ignore_index=True)
     st.dataframe(tabela_bonita(resumo[["tipo", *CAMPOS, *analise.INDICADORES]]), hide_index=True,
-                 use_container_width=True, column_config=CONFIG_NUMEROS)
+                 width="stretch", column_config=CONFIG_NUMEROS)
     with st.expander("Tabela completa das unidades"):
         st.dataframe(tabela_bonita(df_mes[["tipo", "unidade", *CAMPOS, *analise.INDICADORES]]),
-                     hide_index=True, use_container_width=True, column_config=CONFIG_NUMEROS)
+                     hide_index=True, width="stretch", column_config=CONFIG_NUMEROS)
 
 
 def pagina_evolucao():
@@ -274,26 +324,26 @@ def pagina_evolucao():
     serie = serie_do_recorte(df, recorte)
     if campos:
         st.plotly_chart(graficos.evolucao_campos(serie, campos, f"{recorte} · campos mês a mês"),
-                        use_container_width=True, theme=None)
+                        width="stretch", theme=None)
 
     st.subheader("Indicadores: Total SAS × CRAS × CREAS")
     ind = st.selectbox("Indicador", list(analise.INDICADORES), format_func=analise.INDICADORES.get)
     tipos = analise.por_tipo(df)
     series = {"Total SAS": analise.total_sas(df), "CRAS": tipos[tipos["tipo"] == "CRAS"],
               "CREAS": tipos[tipos["tipo"] == "CREAS"]}
-    st.plotly_chart(graficos.evolucao_indicador(series, ind), use_container_width=True, theme=None)
+    st.plotly_chart(graficos.evolucao_indicador(series, ind), width="stretch", theme=None)
 
     st.subheader("Participação de CRAS e CREAS no total")
     campo = st.selectbox("Campo", list(CAMPOS), index=5, format_func=CAMPOS.get, key="evo_tipo")
-    st.plotly_chart(graficos.tipo_mensal(tipos, campo), use_container_width=True, theme=None)
+    st.plotly_chart(graficos.tipo_mensal(tipos, campo), width="stretch", theme=None)
 
     st.subheader("Mapa de calor por unidade")
     campo_mapa = st.selectbox("Campo", list(CAMPOS), index=5, format_func=CAMPOS.get, key="evo_mapa")
-    st.plotly_chart(graficos.mapa_calor(df, campo_mapa), use_container_width=True, theme=None)
+    st.plotly_chart(graficos.mapa_calor(df, campo_mapa), width="stretch", theme=None)
 
     with st.expander(f"Tabela mensal — {recorte}"):
         cols = ["mes", *CAMPOS, *analise.INDICADORES]
-        st.dataframe(tabela_bonita(serie[cols]), hide_index=True, use_container_width=True,
+        st.dataframe(tabela_bonita(serie[cols]), hide_index=True, width="stretch",
                      column_config=CONFIG_NUMEROS)
 
 
@@ -317,7 +367,7 @@ def pagina_alertas():
         return
     tabela["Gravidade"] = tabela["Gravidade"].map(icones)
     filtro = st.multiselect("Mostrar", list(icones.values()), default=list(icones.values()))
-    st.dataframe(tabela[tabela["Gravidade"].isin(filtro)], hide_index=True, use_container_width=True)
+    st.dataframe(tabela[tabela["Gravidade"].isin(filtro)], hide_index=True, width="stretch")
     with st.expander("Como os alertas são calculados"):
         st.markdown("""
 - 🔴 **Concessão acima da cota** — cestas concedidas maiores que a cota disponível.
@@ -337,6 +387,16 @@ def pagina_dados():
     st.header("🗂️ Histórico e relatório")
     meses = sorted(df["mes"].unique())
     st.caption(f"{len(meses)} meses · {df['unidade'].nunique()} unidades · {len(df)} registros")
+    with st.container(border=True):
+        st.markdown("**🖨️ Relatório mensal para impressão (PDF)**")
+        st.caption("Resumo do Total SAS com comparação ao mês anterior, tabela de CRAS e CREAS, "
+                   "evolução dos últimos 12 meses e alertas de conferência.")
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            mes_pdf = escolher_mes_existente(df, "pdf_mes", "Mês do relatório")
+        with c2:
+            st.write("")
+            botao_pdf(mes_pdf, "historico")
     c1, c2 = st.columns(2)
     c1.download_button("⬇️ Relatório completo (Excel)", relatorio.gerar_excel(df),
                        file_name=f"relatorio_cestas_{meses[0]}_a_{meses[-1]}.xlsx", type="primary",
@@ -348,7 +408,7 @@ def pagina_dados():
     vista = df[df["mes"].isin(filtro)] if filtro else df
     st.dataframe(tabela_bonita(vista[["mes", "tipo", "unidade", *CAMPOS, "arquivo", "importado_em"]])
                  .rename(columns={"arquivo": "Arquivo de origem", "importado_em": "Importado em"}),
-                 hide_index=True, use_container_width=True, column_config=CONFIG_NUMEROS)
+                 hide_index=True, width="stretch", column_config=CONFIG_NUMEROS)
 
     with st.expander("🗑️ Excluir dados"):
         c1, c2, c3 = st.columns([2, 3, 1])

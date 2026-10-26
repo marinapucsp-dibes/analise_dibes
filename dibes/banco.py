@@ -1,62 +1,87 @@
-"""Armazenamento do histórico mensal em SQLite (um registro por unidade e mês)."""
+"""Armazenamento do histórico mensal (um registro por unidade e mês).
+
+Usa o banco indicado em DIBES_DATABASE_URL (ex.: Postgres do Supabase, para uso
+na nuvem). Sem essa variável, grava num arquivo SQLite local (dados/dibes.db).
+"""
 
 from __future__ import annotations
 
 import os
-import sqlite3
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
+from sqlalchemy import Column, Float, MetaData, String, Table, create_engine, delete, select
+from sqlalchemy.engine import Engine
 
 from .config import CAMPOS
 
-CAMINHO_PADRAO = Path(os.environ.get("DIBES_BANCO", Path(__file__).resolve().parent.parent / "dados" / "dibes.db"))
+ARQUIVO_PADRAO = Path(os.environ.get("DIBES_BANCO", Path(__file__).resolve().parent.parent / "dados" / "dibes.db"))
+
+metadados = MetaData()
+registros = Table(
+    "registros", metadados,
+    Column("mes", String(7), primary_key=True),
+    Column("unidade", String(200), primary_key=True),
+    Column("tipo", String(10), nullable=False),
+    *[Column(c, Float) for c in CAMPOS],
+    Column("arquivo", String(500)),
+    Column("importado_em", String(19)),
+)
 
 
-def conectar(caminho: Path | str = CAMINHO_PADRAO) -> sqlite3.Connection:
-    Path(caminho).parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(caminho)
-    colunas = ", ".join(f"{c} REAL" for c in CAMPOS)
-    con.execute(f"""
-        CREATE TABLE IF NOT EXISTS registros (
-            mes TEXT NOT NULL,
-            unidade TEXT NOT NULL,
-            tipo TEXT NOT NULL,
-            {colunas},
-            arquivo TEXT,
-            importado_em TEXT,
-            PRIMARY KEY (mes, unidade)
-        )""")
-    return con
+def url_padrao() -> str:
+    url = os.environ.get("DIBES_DATABASE_URL")
+    if url:
+        # o Supabase/Neon fornecem "postgres://" ou "postgresql://"; usamos o driver psycopg 3
+        return url.replace("postgres://", "postgresql://", 1).replace("postgresql://", "postgresql+psycopg://", 1)
+    ARQUIVO_PADRAO.parent.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{ARQUIVO_PADRAO}"
 
 
-def salvar(df: pd.DataFrame, arquivo: str = "", caminho: Path | str = CAMINHO_PADRAO) -> int:
+def conectar(url: str | Path | None = None) -> Engine:
+    return _engine(str(url) if url else url_padrao())
+
+
+@lru_cache(maxsize=None)
+def _engine(url: str) -> Engine:
+    """Engine do banco; cria a tabela na primeira vez. Aceita URL ou caminho de arquivo SQLite."""
+    if "://" not in url:
+        Path(url).parent.mkdir(parents=True, exist_ok=True)
+        url = f"sqlite:///{url}"
+    engine = create_engine(url, pool_pre_ping=True)
+    metadados.create_all(engine)
+    return engine
+
+
+def salvar(df: pd.DataFrame, arquivo: str = "", url: str | None = None) -> int:
     """Grava (ou substitui) os registros de cada unidade/mês. Retorna a quantidade gravada."""
     agora = datetime.now().isoformat(timespec="seconds")
     linhas = [
-        (r.mes, r.unidade.strip(), r.tipo, *[None if pd.isna(getattr(r, c)) else float(getattr(r, c)) for c in CAMPOS],
-         arquivo, agora)
+        {"mes": r.mes, "unidade": r.unidade.strip(), "tipo": r.tipo, "arquivo": arquivo, "importado_em": agora,
+         **{c: None if pd.isna(getattr(r, c)) else float(getattr(r, c)) for c in CAMPOS}}
         for r in df.itertuples(index=False)
     ]
-    marcadores = ", ".join("?" * (len(CAMPOS) + 5))
-    with conectar(caminho) as con:
-        con.executemany(f"INSERT OR REPLACE INTO registros (mes, unidade, tipo, {', '.join(CAMPOS)}, arquivo, "
-                        f"importado_em) VALUES ({marcadores})", linhas)
+    with conectar(url).begin() as con:
+        for l in linhas:
+            con.execute(delete(registros).where(registros.c.mes == l["mes"], registros.c.unidade == l["unidade"]))
+        if linhas:
+            con.execute(registros.insert(), linhas)
     return len(linhas)
 
 
-def carregar(caminho: Path | str = CAMINHO_PADRAO) -> pd.DataFrame:
-    with conectar(caminho) as con:
-        df = pd.read_sql_query("SELECT * FROM registros ORDER BY mes, tipo, unidade", con)
-    return df
+def carregar(url: str | None = None) -> pd.DataFrame:
+    consulta = select(registros).order_by(registros.c.mes, registros.c.tipo, registros.c.unidade)
+    with conectar(url).connect() as con:
+        return pd.read_sql(consulta, con)
 
 
-def excluir_mes(mes: str, caminho: Path | str = CAMINHO_PADRAO) -> int:
-    with conectar(caminho) as con:
-        return con.execute("DELETE FROM registros WHERE mes = ?", (mes,)).rowcount
+def excluir_mes(mes: str, url: str | None = None) -> int:
+    with conectar(url).begin() as con:
+        return con.execute(delete(registros).where(registros.c.mes == mes)).rowcount
 
 
-def excluir_unidade(mes: str, unidade: str, caminho: Path | str = CAMINHO_PADRAO) -> int:
-    with conectar(caminho) as con:
-        return con.execute("DELETE FROM registros WHERE mes = ? AND unidade = ?", (mes, unidade)).rowcount
+def excluir_unidade(mes: str, unidade: str, url: str | None = None) -> int:
+    with conectar(url).begin() as con:
+        return con.execute(delete(registros).where(registros.c.mes == mes, registros.c.unidade == unidade)).rowcount
