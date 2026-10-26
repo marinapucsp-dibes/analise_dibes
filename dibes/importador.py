@@ -66,7 +66,7 @@ def para_numero(valor) -> float | None:
 
 _PADROES_MES = [
     (re.compile(r"(20\d{2})[-/_.](0?[1-9]|1[0-2])(?!\d)"), lambda m: (int(m[1]), int(m[2]))),
-    (re.compile(r"(?<!\d)(0?[1-9]|1[0-2])[-/_.](20\d{2})"), lambda m: (int(m[2]), int(m[1]))),
+    (re.compile(r"(?<![\d/.-])(0?[1-9]|1[0-2])[-/_.](20\d{2})"), lambda m: (int(m[2]), int(m[1]))),
     (re.compile(r"\b(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[a-zç]*\.?[\s/_\-de]*((?:20)?\d{2})(?!\d)"),
      lambda m: (int(m[2]) + 2000 if len(m[2]) == 2 else int(m[2]), MESES_ABREV.index(m[1]) + 1)),
 ]
@@ -346,17 +346,23 @@ def ler_listas_js(codigo: str, nome: str, mes: str | None) -> ResultadoImportaca
             resultados.append(r)
     if not resultados:
         return None
-    r = _juntar(resultados)
+    return _juntar(resultados)
+
+
+def deduzir_sas(r: ResultadoImportacao) -> None:
+    """Em cada mês com linhas de SAS e unidades sem SAS, descobre a SAS de cada unidade."""
     df = r.dados
-    unidades, sas = df[df["tipo"] != "SAS"], df[df["tipo"] == "SAS"]
-    if not unidades.empty and not sas.empty and unidades["sas"].isna().all():
+    for mes, parte in df.groupby(df["mes"].fillna("")):
+        unidades, sas = parte[parte["tipo"] != "SAS"], parte[parte["tipo"] == "SAS"]
+        if unidades.empty or sas.empty or unidades["sas"].notna().any():
+            continue
         grupos, acertos = atribuir_sas(unidades, sas)
-        if grupos is not None:
-            df.loc[unidades.index, "sas"] = grupos
-            if acertos < 0.8:
-                r.avisos.append(f"{nome}: a SAS de algumas unidades foi deduzida com pouca segurança "
-                                "(as somas não batem com os totais das SAS). Confira a coluna SAS na prévia.")
-    return r
+        if grupos is None:
+            continue
+        df.loc[unidades.index, "sas"] = grupos
+        if acertos < 0.8:
+            r.avisos.append(f"{mes or 'Arquivo'}: a SAS de algumas unidades foi deduzida com pouca segurança "
+                            "(as somas não batem com os totais das SAS). Confira a coluna SAS na prévia.")
 
 
 _PALAVRAS_GENERICAS = {"sas", "cras", "creas", "centro", "pop", "de", "do", "da", "dos", "das", "ii", "iii"}
@@ -377,7 +383,9 @@ def atribuir_sas(unidades: pd.DataFrame, sas: pd.DataFrame) -> tuple[list[str] |
     import numpy as np
 
     u = unidades[list(CAMPOS)].fillna(0).to_numpy(float)
-    alvo = sas[list(CAMPOS)].fillna(0).to_numpy(float)
+    alvo = sas[list(CAMPOS)].to_numpy(float)
+    peso = (~np.isnan(alvo)).astype(float)  # campo ausente na SAS (ex.: coluna cortada) não conta
+    alvo = np.nan_to_num(alvo)
     n, k = len(u), len(alvo)
     if n < k:
         return None, 0.0
@@ -393,7 +401,8 @@ def atribuir_sas(unidades: pd.DataFrame, sas: pd.DataFrame) -> tuple[list[str] |
     for j in range(1, k + 1):
         for i in range(j, n - (k - j) + 1):
             inicio = np.arange(j - 1, i)
-            c = (custo[j - 1, inicio] + np.abs(acumulado[i] - acumulado[inicio] - alvo[j - 1]).sum(axis=1)
+            c = (custo[j - 1, inicio]
+                 + (np.abs(acumulado[i] - acumulado[inicio] - alvo[j - 1]) * peso[j - 1]).sum(axis=1)
                  + pena[j - 1, i] - pena[j - 1, inicio])
             melhor = int(np.argmin(c))
             custo[j, i], corte[j, i] = c[melhor], inicio[melhor]
@@ -402,8 +411,8 @@ def atribuir_sas(unidades: pd.DataFrame, sas: pd.DataFrame) -> tuple[list[str] |
     for j in range(k, 0, -1):
         inicio = corte[j, fim]
         grupos[inicio:fim] = [nomes[j - 1]] * (fim - inicio)
-        iguais = np.isclose(acumulado[fim] - acumulado[inicio], alvo[j - 1]).sum()
-        exatos += iguais >= 4
+        iguais = (np.isclose(acumulado[fim] - acumulado[inicio], alvo[j - 1]) * peso[j - 1]).sum()
+        exatos += iguais >= min(4, peso[j - 1].sum())
         fim = inicio
     return grupos, exatos / k
 
@@ -417,13 +426,122 @@ def ler_pdf(conteudo: bytes, nome: str, mes_padrao: str | None) -> ResultadoImpo
             texto.append(pagina.extract_text() or "")
             for tabela in pagina.extract_tables():
                 grade.extend(tabela)
-    texto_total = "\n".join(texto)
-    mes = detectar_mes(texto_total[:1000]) or mes_padrao
+        texto_total = "\n".join(texto)
+        mes = detectar_mes(texto_total[:1000]) or mes_padrao
+        # PDFs impressos de páginas web: monta a tabela pela posição das palavras
+        posicional = _ler_pdf_posicional(pdf, nome, mes)
+    if posicional is not None:
+        return posicional
     if grade:
         r = interpretar_grade(grade, mes, origem=nome)
         if not r.dados.empty:
             return r
     return _ler_texto_livre(texto_total, nome, mes)
+
+
+# palavras (normalizadas) que identificam o título de cada coluna num PDF
+_TITULOS_PDF = {
+    "cota_disponivel": {"cota", "cotas"},
+    "quantidade_solicitada": {"solicitada", "solicitadas", "recebidas"},
+    "demanda_registrada": {"demanda"},
+    "atendimento_social": {"atendimento", "atendimentos", "tecnico"},
+    "recibos_emitidos": {"recibos", "validos", "emitidos"},
+    "cestas_concedidas": {"concedidas", "entregues"},
+}
+
+
+def _linhas_pdf(pagina, tolerancia: float = 3) -> list[list[dict]]:
+    linhas: list[list[dict]] = []
+    for w in sorted(pagina.extract_words(), key=lambda w: (round(w["top"]), w["x0"])):
+        if linhas and abs(w["top"] - linhas[-1][0]["top"]) <= tolerancia:
+            linhas[-1].append(w)
+        else:
+            linhas.append([w])
+    return linhas
+
+
+def _cabecalho_pdf(linhas: list[list[dict]]) -> tuple[dict[str, tuple[float, float]], float] | None:
+    """Procura o título da tabela (pode ocupar 2 ou 3 linhas). Retorna campo -> (x0, x1) e o fim do título."""
+    for i, linha in enumerate(linhas):
+        if any(para_numero(w["text"]) is not None for w in linha) or len(linha) > 10:
+            continue
+        bloco = [l for l in linhas[max(0, i - 2):i + 3] if abs(l[0]["top"] - linha[0]["top"]) <= 20
+                 and not any(para_numero(w["text"]) is not None for w in l)]
+        colunas: dict[str, tuple[float, float]] = {}
+        for w in (w for l in bloco for w in l):
+            n = normalizar(w["text"]).strip(".:")
+            for campo, titulos in _TITULOS_PDF.items():
+                if n in titulos:
+                    x0, x1 = colunas.get(campo, (w["x0"], w["x1"]))
+                    colunas[campo] = (min(x0, w["x0"]), max(x1, w["x1"]))
+        if len(colunas) >= 3:
+            return colunas, max(w["bottom"] for l in bloco for w in l)
+    return None
+
+
+def _ler_pdf_posicional(pdf, nome: str, mes: str | None) -> ResultadoImportacao | None:
+    """Lê tabelas de PDFs impressos do navegador, em que o nome da unidade pode quebrar em várias
+    linhas (acima e abaixo dos números) e colunas podem ter sido cortadas na margem."""
+    colunas = None
+    linhas_tabela: list[list] = []
+    for pagina in pdf.pages:
+        linhas = _linhas_pdf(pagina)
+        achado = _cabecalho_pdf(linhas)
+        inicio = -1.0
+        if achado:
+            colunas, inicio = achado
+        if not colunas:
+            continue
+        centros = {c: (x0 + x1) / 2 for c, (x0, x1) in colunas.items()}
+        ordenados = sorted(centros.values())
+        folga = min((b - a for a, b in zip(ordenados, ordenados[1:])), default=60) / 2
+        limite_nome = min(x0 for x0, _ in colunas.values()) - 2
+
+        def coluna_do_numero(w):
+            cx = (w["x0"] + w["x1"]) / 2
+            for c, (x0, x1) in colunas.items():
+                if x0 - 2 <= cx <= x1 + 2:
+                    return c
+            c, centro = min(centros.items(), key=lambda kv: abs(kv[1] - cx))
+            return c if abs(centro - cx) <= folga else None  # número fora das colunas (ex.: coluna cortada)
+
+        com_numeros, so_nome = [], []
+        for linha in linhas:
+            if linha[0]["top"] <= inicio:
+                continue
+            valores, partes = {}, []
+            for w in linha:
+                v = para_numero(w["text"])
+                if v is not None and w["x0"] >= limite_nome:
+                    c = coluna_do_numero(w)
+                    if c and c not in valores:
+                        valores[c] = v
+                elif w["x1"] <= limite_nome + 1:
+                    partes.append(w["text"])
+            if len(valores) >= 3:
+                com_numeros.append({"top": linha[0]["top"], "partes": [(linha[0]["top"], " ".join(partes))],
+                                    "valores": valores})
+            elif partes and len(partes) == len(linha) and re.search(r"[A-Za-zÀ-ÿ]", " ".join(partes)):
+                so_nome.append((linha[0]["top"], " ".join(partes)))
+        # pedaços de nome acima/abaixo dos números pertencem à linha de números mais próxima
+        for top, texto in so_nome:
+            if com_numeros:
+                alvo = min(com_numeros, key=lambda r: abs(r["top"] - top))
+                if abs(alvo["top"] - top) <= 20:
+                    alvo["partes"].append((top, texto))
+        for r in com_numeros:
+            nome_unid = " ".join(t for _, t in sorted(r["partes"]) if t).strip()
+            if nome_unid:
+                linhas_tabela.append([nome_unid, *[r["valores"].get(c) for c in colunas]])
+    if not linhas_tabela:
+        return None
+    titulo = ["Unidade", *[CAMPOS[c] for c in colunas]]
+    r = interpretar_grade([titulo, *linhas_tabela], mes, origem=nome)
+    if len(colunas) < len(CAMPOS):
+        r.avisos.append(f"{nome}: alguma coluna pode ter sido cortada na impressão do PDF. Se a página tiver "
+                        "o painel por CRAS/CREAS, importe os dois PDFs juntos: os campos que faltarem nas SAS "
+                        "serão somados a partir das unidades. Outra opção é colar o código HTML do painel.")
+    return r
 
 
 def _ler_texto_livre(texto: str, nome: str, mes: str | None) -> ResultadoImportacao:
@@ -512,6 +630,7 @@ def finalizar(r: ResultadoImportacao) -> ResultadoImportacao:
     df = r.dados
     if df.empty:
         return r
+    deduzir_sas(r)
     if df["mes"].isna().any():
         r.avisos.append("Algumas linhas estão sem mês de referência: informe o mês antes de salvar.")
     chave = df["mes"].fillna("") + "|" + df["unidade"].str.upper()

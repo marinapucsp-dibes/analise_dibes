@@ -68,7 +68,10 @@ Formatos aceitos:
 
 - **Excel** (`.xlsx`, `.xls`, `.ods`) — pode ter **uma aba por mês** (ex.: “Março 2026”); cada aba é lida separadamente.
 - **CSV** (separador `;`, `,` ou tabulação; números no padrão brasileiro `1.234,5`).
-- **PDF** — tabelas do documento; se o PDF não tiver tabela desenhada, as linhas de texto são lidas.
+- **PDF** — inclusive o painel salvo pelo navegador (*Imprimir → Salvar como PDF*): a tabela é montada pela
+  posição das palavras, juntando nomes quebrados em várias linhas. Se a impressão cortar uma coluna, o
+  sistema avisa; enviando juntos o PDF por SAS e o PDF por CRAS/CREAS, os campos que faltarem nas SAS
+  são somados a partir das unidades.
 - **HTML** — envie o arquivo `.html` ou **cole o código** (página inteira ou só a `<table>`). Também lê
   painéis cujos dados ficam em listas JavaScript (`const sasData = [...]`, `const crasData = [...]`),
   como o painel mensal da Secretaria. Quando o painel lista as SAS e, separadamente, as unidades na mesma

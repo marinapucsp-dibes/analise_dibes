@@ -70,6 +70,11 @@ def _por_sas_bruto(df: pd.DataFrame) -> pd.DataFrame:
     informadas = informadas.groupby(["mes", "sas"], as_index=False)[CAMPOS_L].sum(min_count=1)
     u = unidades(df)
     somadas = u.groupby(["mes", "sas"], as_index=False)[CAMPOS_L].sum(min_count=1)
+    # campo que faltou na linha da SAS (ex.: coluna cortada no PDF) vem da soma das unidades
+    informadas = (informadas.set_index(["mes", "sas"])
+                  .combine_first(somadas.set_index(["mes", "sas"]).reindex(
+                      informadas.set_index(["mes", "sas"]).index))
+                  .reset_index())
     chave = set(zip(informadas["mes"], informadas["sas"]))
     faltantes = somadas[[(m, s) not in chave for m, s in zip(somadas["mes"], somadas["sas"])]]
     return pd.concat([informadas, faltantes], ignore_index=True).sort_values(["mes", "sas"])

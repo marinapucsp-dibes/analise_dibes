@@ -192,3 +192,56 @@ def test_estoque():
     regras = analise.alertas(d, "2026-03").groupby("Regra")["Unidade"].apply(set)
     assert "CRAS NORTE II" in regras["Cestas em estoque"]
     assert "CRAS M'BOI LESTE" in regras["Uso de estoque do mês anterior"]
+
+
+def _pdf_impresso(caminho, linhas, cortar_ultima=False):
+    """PDF como o 'Imprimir > Salvar como PDF' do navegador: título em 3 linhas, nomes quebrados
+    acima e abaixo dos números e, opcionalmente, a última coluna cortada na margem."""
+    from reportlab.pdfgen import canvas
+
+    c = canvas.Canvas(str(caminho), pagesize=(595, 842))
+    c.setFont("Helvetica", 9)
+    c.drawString(24, 826, "26/10/2026, 15:51 Dashboard SAS - Análise de Cestas Básicas")
+    c.drawString(73, 800, "Mês: Fevereiro/2026")
+    xs = [173, 216, 280, 342, 421, 474]
+    titulos = [("", "Cotas", ""), ("Cestas", "", "Recebidas"), ("", "Demanda", ""), ("", "Atendimento", ""),
+               ("Recibos", "", "Válidos"), ("Cestas", "", "Entregues")]
+    if cortar_ultima:
+        titulos[-1] = ("C", "", "E")
+    for x, partes in zip(xs, titulos):
+        for dy, t in zip((0, 8, 16), partes):
+            c.drawString(x, 700 - dy, t)
+    c.drawString(73, 692, "Unidade")
+    y = 660
+    for nome, valores in linhas:
+        partes = nome.split(" ", 1)
+        if len(partes) == 2:
+            c.drawString(73, y + 9, partes[0])
+            c.drawString(73, y - 9, partes[1])
+        else:
+            c.drawString(73, y, nome)
+        for x, v in zip(xs, valores):
+            c.drawString(x, y, str(v)[:1] if cortar_ultima and x == xs[-1] else str(v))
+        y -= 54
+    c.drawString(73, y - 40, "Análise Técnica Detalhada")
+    c.drawString(73, y - 52, "Taxa de Recebimento: 80.6% das cotas foram recebidas (5.930 de 7.357)")
+    c.save()
+
+
+def test_pdf_impresso_do_navegador(tmp_path):
+    sas = [("SAS NORTE - NO", [100, 90, 80, 70, 75, 78]), ("SAS VILA SUL - VS", [50, 50, 40, 30, 30, 33])]
+    und = [("CRAS NORTE", [70, 60, 60, 50, 55, 57]), ("CREAS NORTE", [30, 30, 20, 20, 20, 21]),
+           ("CRAS VILA SUL", [50, 50, 38, 30, 30, 33]), ("CREAS VILA SUL", [0, 0, 2, 0, 0, 0])]
+    _pdf_impresso(tmp_path / "sas.pdf", sas, cortar_ultima=True)
+    _pdf_impresso(tmp_path / "cras.pdf", und)
+    partes = [importador.importar_arquivo((tmp_path / f).read_bytes(), f) for f in ("sas.pdf", "cras.pdf")]
+    r = importador.finalizar(importador._juntar(partes))
+    d = r.dados.set_index("unidade")
+    assert set(d["mes"]) == {"2026-02"}  # e não 10/2026, a data da impressão
+    assert d.loc["CRAS VILA SUL", "sas"] == "SAS VILA SUL - VS"  # nome quebrado em duas linhas
+    assert d.loc["CREAS NORTE", "cestas_concedidas"] == 21
+    assert pd.isna(d.loc["SAS NORTE - NO", "cestas_concedidas"])  # coluna cortada: não lê o "7"
+    assert any("cortada" in a for a in r.avisos)
+    total = analise.total_geral(r.dados).iloc[0]
+    assert total["cestas_concedidas"] == 111  # vem da soma das unidades
+    assert total["estoque"] == 140 - 111
