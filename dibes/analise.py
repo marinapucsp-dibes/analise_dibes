@@ -23,6 +23,7 @@ INDICADORES = {
     "atendimento_demanda": "Concessão sobre a demanda (%)",
     "atendimento_tecnico": "Atendimento técnico sobre a demanda (%)",
     "saldo_cota": "Saldo da cota",
+    "estoque": "Cestas em estoque",
     "demanda_reprimida": "Demanda reprimida",
     "recibos_sem_atendimento": "Recibos sem registro de atendimento",
     "cestas_sem_recibo": "Cestas sem recibo",
@@ -43,6 +44,8 @@ def com_indicadores(df: pd.DataFrame) -> pd.DataFrame:
     d["atendimento_demanda"] = _div(d["cestas_concedidas"], d["demanda_registrada"])
     d["atendimento_tecnico"] = _div(d["atendimento_social"], d["demanda_registrada"])
     d["saldo_cota"] = d["cota_disponivel"] - d["cestas_concedidas"]
+    # negativo = foram concedidas cestas guardadas de meses anteriores
+    d["estoque"] = d["quantidade_solicitada"] - d["cestas_concedidas"]
     d["demanda_reprimida"] = (d["demanda_registrada"] - d["cestas_concedidas"]).clip(lower=0)
     d["recibos_sem_atendimento"] = (d["recibos_emitidos"] - d["atendimento_social"]).clip(lower=0)
     d["cestas_sem_recibo"] = (d["cestas_concedidas"] - d["recibos_emitidos"]).clip(lower=0)
@@ -146,6 +149,13 @@ def alertas(df: pd.DataFrame, mes: str, limite_variacao: float = 30.0) -> pd.Dat
                 f"{r.cestas_concedidas:.0f} cestas concedidas sem cota registrada para a unidade.")
         if ok(r.uso_cota) and r.uso_cota < 50:
             add("Informativo", r, "Baixo uso da cota", f"Apenas {r.uso_cota:.0f}% da cota foi utilizada.")
+        if ok(r.estoque) and r.estoque > 0:
+            add("Atenção", r, "Cestas em estoque",
+                f"{r.estoque:.0f} cestas solicitadas e não concedidas no mês (risco de vencimento e de "
+                "armazenamento inadequado).")
+        elif ok(r.estoque) and r.estoque < 0:
+            add("Informativo", r, "Uso de estoque do mês anterior",
+                f"{-r.estoque:.0f} cestas concedidas além da quantidade solicitada no mês.")
 
     # SAS informada × soma das suas unidades
     sas_inf = do_mes[do_mes["tipo"] == "SAS"].set_index("unidade")

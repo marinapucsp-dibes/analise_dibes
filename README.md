@@ -118,6 +118,7 @@ Botão **🖨️ Relatório do mês (PDF)** no Painel do mês e em Histórico e 
 | Concessão sobre a demanda (%) | Cestas concedidas ÷ Demanda registrada |
 | Atendimento técnico sobre a demanda (%) | Atendimento social ÷ Demanda registrada |
 | Saldo da cota | Cota disponível − Cestas concedidas |
+| Cestas em estoque | Quantidade solicitada − Cestas concedidas (negativo = uso de estoque de meses anteriores) |
 | Demanda reprimida | Demanda registrada − Cestas concedidas (mínimo 0) |
 | Recibos sem registro de atendimento | Recibos − Atendimento social (mínimo 0) |
 | Cestas sem recibo | Cestas concedidas − Recibos (mínimo 0) |

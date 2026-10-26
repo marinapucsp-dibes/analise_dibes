@@ -196,21 +196,23 @@ def gerar_pdf(df: pd.DataFrame, mes: str, meses_historico: int = 12) -> bytes:
         f"<b>{num(t_mes['cota_disponivel'])}</b> ({num(t_mes['uso_cota'], 1, '%')} de uso), com demanda registrada de "
         f"<b>{num(t_mes['demanda_registrada'])}</b> e <b>{num(t_mes['atendimento_social'])}</b> atendimentos "
         f"({num(t_mes['atendimento_tecnico'], 1, '%')} da demanda). Recibos sem registro de atendimento social: "
-        f"<b>{num(t_mes['recibos_sem_atendimento'])}</b>. Unidades informantes: {int(t_mes['unidades'])}.",
+        f"<b>{num(t_mes['recibos_sem_atendimento'])}</b>. Cestas em estoque (solicitadas − concedidas): "
+        f"<b>{num(t_mes['estoque'])}</b>{' (uso de estoque de meses anteriores)' if t_mes['estoque'] < 0 else ''}. "
+        f"Unidades informantes: {int(t_mes['unidades'])}.",
         ParagraphStyle("p", parent=TEXTO, spaceBefore=8)))
 
     def linha_de(nomes, r):
-        return [*nomes, *[num(r[c]) for c in CAMPOS], num(r["uso_cota"], 1, "%")]
+        return [*nomes, *[num(r[c]) for c in CAMPOS], num(r["estoque"]), num(r["uso_cota"], 1, "%")]
 
     # Por SAS
     if com_sas:
         sas_mes = analise.por_sas(df[df["mes"] == mes])
         corpo.append(PageBreak())
         corpo.append(Paragraph(f"{next(secao)}. Por SAS — {rotulo_mes(mes)}", SECAO))
-        linhas = [["SAS", *[ROTULO_CURTO[c] for c in CAMPOS], "Uso da\ncota"]]
+        linhas = [["SAS", *[ROTULO_CURTO[c] for c in CAMPOS], "Cestas em\nestoque", "Uso da\ncota"]]
         linhas += [linha_de([r["sas"]], r) for _, r in sas_mes.iterrows()]
         linhas.append(linha_de(["Total Geral"], t_mes))
-        corpo.append(tabela(linhas, [7.4 * cm] + [2.55 * cm] * 6 + [2 * cm], (len(linhas) - 1,)))
+        corpo.append(tabela(linhas, [7 * cm] + [2.35 * cm] * 6 + [2.1 * cm, 1.9 * cm], (len(linhas) - 1,)))
         corpo.append(PageBreak())
         corpo.append(KeepTogether([Paragraph("Cota × Demanda × Cestas concedidas por SAS", TEXTO),
                                    grafico_barras([nome_curto(x) for x in sas_mes["sas"]], sas_mes)]))
@@ -221,7 +223,8 @@ def gerar_pdf(df: pd.DataFrame, mes: str, meses_historico: int = 12) -> bytes:
     und = und.sort_values(["sas", "_t", "unidade"] if com_sas else ["_t", "unidade"])
     corpo.append(PageBreak())
     corpo.append(Paragraph(f"{next(secao)}. CRAS, CREAS e demais unidades — {rotulo_mes(mes)}", SECAO))
-    cab = (["SAS"] if com_sas else []) + ["Unidade", *[ROTULO_CURTO[c] for c in CAMPOS], "Uso da\ncota"]
+    cab = (["SAS"] if com_sas else []) + ["Unidade", *[ROTULO_CURTO[c] for c in CAMPOS], "Cestas em\nestoque",
+                                          "Uso da\ncota"]
     linhas, totais = [cab], []
     for _, r in und.iterrows():
         linhas.append(linha_de(([Paragraph(nome_curto(r["sas"]), CELULA)] if com_sas else [])
@@ -230,7 +233,8 @@ def gerar_pdf(df: pd.DataFrame, mes: str, meses_historico: int = 12) -> bytes:
         if tipo in tipos_mes.index:
             linhas.append(linha_de(([""] if com_sas else []) + [f"Total {tipo}"], tipos_mes.loc[tipo]))
             totais.append(len(linhas) - 1)
-    larguras = ([5 * cm] if com_sas else []) + [6 * cm if com_sas else 8 * cm] + [2.2 * cm] * 6 + [1.9 * cm]
+    larguras = ([4.3 * cm] if com_sas else []) + [5.2 * cm if com_sas else 8 * cm] + [2.1 * cm] * 6 \
+        + [1.9 * cm, 1.7 * cm]
     corpo.append(tabela(linhas, larguras, tuple(totais)))
     if not com_sas and len(und) <= 30:
         corpo.append(Spacer(1, 8))
@@ -248,10 +252,10 @@ def gerar_pdf(df: pd.DataFrame, mes: str, meses_historico: int = 12) -> bytes:
         corpo.append(grafico_evolucao(t_rec))
         corpo.append(Paragraph("Cestas concedidas por tipo de unidade", TEXTO))
         corpo.append(grafico_tipos(tipos[tipos["mes"].isin(recentes)]))
-        cab = ["Mês", *[ROTULO_CURTO[c] for c in CAMPOS], "Uso da\ncota"]
+        cab = ["Mês", *[ROTULO_CURTO[c] for c in CAMPOS], "Cestas em\nestoque", "Uso da\ncota"]
         linhas = [cab] + [linha_de([rotulo_mes(r["mes"])], r) for _, r in t_rec.iterrows()]
         corpo.append(KeepTogether([Spacer(1, 6), Paragraph("Total Geral mês a mês", TEXTO),
-                                   tabela(linhas, [3 * cm] + [2.8 * cm] * 6 + [2.4 * cm])]))
+                                   tabela(linhas, [3 * cm] + [2.7 * cm] * 6 + [2.4 * cm, 2 * cm])]))
 
     # Alertas
     alertas = analise.alertas(df, mes)

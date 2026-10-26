@@ -315,9 +315,10 @@ def pagina_painel():
     for col, (campo, rotulo) in zip(colunas, CAMPOS.items()):
         col.metric(rotulo, fmt(linha[campo]), fmt_delta(linha[campo], None if ant is None else ant[campo]),
                    border=True)
-    colunas = st.columns(4)
-    piores_se_sobem = {"demanda_reprimida", "recibos_sem_atendimento", "cestas_sem_recibo"}
-    for col, ind in zip(colunas, ["uso_cota", "atendimento_tecnico", "recibos_sem_atendimento", "saldo_cota"]):
+    colunas = st.columns(5)
+    piores_se_sobem = {"demanda_reprimida", "recibos_sem_atendimento", "cestas_sem_recibo", "estoque"}
+    for col, ind in zip(colunas, ["uso_cota", "atendimento_tecnico", "recibos_sem_atendimento", "saldo_cota",
+                                  "estoque"]):
         pct = ind in analise.PERCENTUAIS
         col.metric(analise.INDICADORES[ind], fmt(linha[ind], 1 if pct else 0, "%" if pct else ""),
                    fmt_delta(linha[ind], None if ant is None else ant[ind], pct=pct),
@@ -430,6 +431,9 @@ As regras valem para cada SAS e cada unidade.
 - 🟠 **Sem dados no mês** — informou no mês anterior e não neste.
 - 🔵 **Concessões sem cota na unidade** — a cota pode estar registrada só na SAS.
 - 🔵 **SAS diferente da soma das unidades** — valor informado para a SAS não bate com a soma dos seus CRAS/CREAS.
+- 🟠 **Cestas em estoque** — quantidade solicitada maior que a concedida: sobraram cestas no mês
+  (risco de vencimento e de armazenamento inadequado).
+- 🔵 **Uso de estoque do mês anterior** — foram concedidas mais cestas do que as solicitadas no mês.
 - 🔵 **Baixo uso da cota** — menos de 50% da cota utilizada.
 - 🔵 **Variação forte nas concessões** — mudança acima do limite escolhido em relação ao mês anterior.
 """)

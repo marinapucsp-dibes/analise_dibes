@@ -180,3 +180,15 @@ def test_banco_antigo_ganha_coluna_sas(tmp_path):
     novo = importador.importar_html_colado(PAINEL_JS).dados
     banco.salvar(novo, "painel", caminho)
     assert banco.mapa_sas(caminho)["CREAS NORTE"] == "SAS NORTE - NO"
+
+
+def test_estoque():
+    d = importador.importar_html_colado(PAINEL_JS).dados
+    total = analise.total_geral(d).iloc[0]
+    assert total["estoque"] == 140 - 131  # quantidade solicitada (cestas recebidas) − concedidas
+    und = analise.por_unidade(d).set_index("unidade")
+    assert und.loc["CRAS NORTE II", "estoque"] == 9
+    assert und.loc["CRAS M'BOI LESTE", "estoque"] == -20  # usou estoque do mês anterior
+    regras = analise.alertas(d, "2026-03").groupby("Regra")["Unidade"].apply(set)
+    assert "CRAS NORTE II" in regras["Cestas em estoque"]
+    assert "CRAS M'BOI LESTE" in regras["Uso de estoque do mês anterior"]
