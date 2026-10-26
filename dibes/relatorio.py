@@ -9,7 +9,7 @@ import pandas as pd
 from . import analise
 from .config import CAMPOS, rotulo_mes
 
-ROTULOS = {"mes": "Mês", "unidade": "Unidade", "tipo": "Tipo", "unidades": "Nº de unidades",
+ROTULOS = {"mes": "Mês", "sas": "SAS", "unidade": "Unidade", "tipo": "Tipo", "unidades": "Nº de unidades",
            **CAMPOS, **analise.INDICADORES}
 
 
@@ -17,7 +17,7 @@ def _formatar(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
     if "mes" in d:
         d["mes"] = d["mes"].map(rotulo_mes)
-    for c in ("uso_cota", "atendimento_demanda", "atendimento_solicitacao"):
+    for c in analise.PERCENTUAIS:
         if c in d:
             d[c] = d[c].round(1)
     return d.rename(columns=ROTULOS)
@@ -27,9 +27,11 @@ def gerar_excel(df: pd.DataFrame) -> bytes:
     meses = sorted(df["mes"].unique())
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as xl:
-        _formatar(analise.total_sas(df)).to_excel(xl, sheet_name="Total SAS", index=False)
+        _formatar(analise.total_geral(df)).to_excel(xl, sheet_name="Total Geral", index=False)
+        if analise.tem_sas(df):
+            _formatar(analise.por_sas(df)).to_excel(xl, sheet_name="Por SAS", index=False)
         _formatar(analise.por_tipo(df)).to_excel(xl, sheet_name="CRAS x CREAS", index=False)
-        colunas = ["mes", "tipo", "unidade", *CAMPOS, *analise.INDICADORES]
+        colunas = ["mes", "sas", "tipo", "unidade", *CAMPOS, *analise.INDICADORES]
         _formatar(analise.por_unidade(df)[colunas]).to_excel(xl, sheet_name="Por unidade", index=False)
         alertas = [analise.alertas(df, m).assign(**{"Mês": rotulo_mes(m)}) for m in meses]
         if alertas:

@@ -15,16 +15,17 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from .config import APELIDOS, APELIDOS_MES, APELIDOS_UNIDADE, CAMPOS, MESES_ABREV, PALAVRAS_TOTAL
+from .config import (APELIDOS, APELIDOS_MES, APELIDOS_SAS, APELIDOS_UNIDADE, CAMPOS, IGNORAR_COLUNAS,
+                     MESES_ABREV, PALAVRAS_TOTAL)
 
-COLUNAS = ["mes", "unidade", "tipo", *CAMPOS]
+COLUNAS = ["mes", "sas", "unidade", "tipo", *CAMPOS]
 
 
 @dataclass
 class ResultadoImportacao:
     dados: pd.DataFrame
     avisos: list[str] = field(default_factory=list)
-    # Totais que vieram escritos no próprio arquivo (linha "Total SAS"), por mês
+    # Totais que vieram escritos no próprio arquivo (linha "Total"), por mês
     totais_informados: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
@@ -63,28 +64,36 @@ def para_numero(valor) -> float | None:
         return None
 
 
+_PADROES_MES = [
+    (re.compile(r"(20\d{2})[-/_.](0?[1-9]|1[0-2])(?!\d)"), lambda m: (int(m[1]), int(m[2]))),
+    (re.compile(r"(?<!\d)(0?[1-9]|1[0-2])[-/_.](20\d{2})"), lambda m: (int(m[2]), int(m[1]))),
+    (re.compile(r"\b(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[a-zç]*\.?[\s/_\-de]*((?:20)?\d{2})(?!\d)"),
+     lambda m: (int(m[2]) + 2000 if len(m[2]) == 2 else int(m[2]), MESES_ABREV.index(m[1]) + 1)),
+]
+
+
 def detectar_mes(texto: str) -> str | None:
-    """Procura uma competência ('março/2026', '03/2026', '2026-03', 'mar-26') no texto."""
+    """Procura uma competência ('março/2026', '03/2026', '2026-03', 'mar-26') no texto.
+    Vale a que aparece primeiro (o título vem antes de datas de rodapé)."""
     t = normalizar(texto)
-    if not t:
+    achados = [(m.start(), converter(m)) for padrao, converter in _PADROES_MES for m in [padrao.search(t)] if m]
+    if not achados:
         return None
-    m = re.search(r"(20\d{2})[-/_.](0?[1-9]|1[0-2])(?!\d)", t)
-    if m:
-        return f"{m.group(1)}-{int(m.group(2)):02d}"
-    m = re.search(r"(?<!\d)(0?[1-9]|1[0-2])[-/_.](20\d{2})", t)
-    if m:
-        return f"{m.group(2)}-{int(m.group(1)):02d}"
-    nomes = r"(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[a-zç]*"
-    m = re.search(nomes + r"\.?[\s/_\-de]*((?:20)?\d{2})(?!\d)", t)
-    if m:
-        ano = m.group(2)
-        ano = int(ano) + 2000 if len(ano) == 2 else int(ano)
-        return f"{ano}-{MESES_ABREV.index(m.group(1)) + 1:02d}"
-    return None
+    ano, mes = min(achados)[1]
+    return f"{ano}-{mes:02d}"
 
 
 def inferir_tipo(unidade: str) -> str:
-    return "CREAS" if "creas" in normalizar(unidade) else "CRAS"
+    n = normalizar(unidade)
+    if n == "sas" or n.startswith("sas ") or n.startswith("supervisao"):
+        return "SAS"
+    if "creas" in n:
+        return "CREAS"
+    if "centro pop" in n or n.startswith("pop "):
+        return "Centro POP"
+    if "cras" in n:
+        return "CRAS"
+    return "Outro"
 
 
 def eh_linha_total(unidade: str) -> bool:
@@ -98,6 +107,8 @@ def _campo_do_cabecalho(texto: str) -> tuple[str | None, int]:
     """Retorna (campo, força do casamento) para um texto de cabeçalho."""
     n = normalizar(texto)
     melhor, forca = None, 0
+    if any(i in n for i in IGNORAR_COLUNAS):
+        return None, 0
     for campo, apelidos in APELIDOS.items():
         for a in apelidos:
             if a in n and len(a) > forca:
@@ -171,10 +182,12 @@ def interpretar_grade(grade: list[list], mes_padrao: str | None = None,
                     and any(normalizar(c).startswith(a) for a in APELIDOS_MES)), None)
     col_unid = next((i for i, c in enumerate(cabecalho) if i not in usados and i != col_mes
                      and any(a in normalizar(c) for a in APELIDOS_UNIDADE)), None)
+    col_sas = next((i for i, c in enumerate(cabecalho) if i not in usados and i not in (col_mes, col_unid)
+                    and any(re.search(rf"\b{a}\b", normalizar(c)) for a in APELIDOS_SAS)), None)
     if col_unid is None:
         # primeira coluna com texto não numérico nas linhas de dados
         for i in range(len(cabecalho)):
-            if i in usados or i == col_mes:
+            if i in usados or i in (col_mes, col_sas):
                 continue
             valores = [l[i] for l in grade[idx_cab + 1:] if str(l[i]).strip()]
             if valores and sum(para_numero(v) is None for v in valores) > len(valores) / 2:
@@ -204,7 +217,9 @@ def interpretar_grade(grade: list[list], mes_padrao: str | None = None,
         if eh_linha_total(unidade):
             totais[mes or ""] = {c: v for c, v in valores.items() if v is not None}
             continue
-        registros.append({"mes": mes, "unidade": unidade, "tipo": inferir_tipo(unidade), **valores})
+        tipo = inferir_tipo(unidade)
+        sas = unidade if tipo == "SAS" else (str(linha[col_sas]).strip() if col_sas is not None else "")
+        registros.append({"mes": mes, "sas": sas or None, "unidade": unidade, "tipo": tipo, **valores})
 
     df = pd.DataFrame(registros, columns=COLUNAS)
     if df.empty:
@@ -273,8 +288,16 @@ def grade_do_html(codigo: str) -> list[list[list[str]]]:
 def ler_html(codigo: str, nome: str, mes_padrao: str | None) -> ResultadoImportacao:
     from bs4 import BeautifulSoup
 
-    texto_pagina = BeautifulSoup(codigo, "html.parser").get_text("\n")
-    mes = detectar_mes(texto_pagina[:2000]) or mes_padrao
+    sopa = BeautifulSoup(codigo, "html.parser")
+    for marca in sopa(["style", "script"]):
+        marca.decompose()
+    texto_pagina = sopa.get_text("\n")
+    mes = detectar_mes(texto_pagina[:3000]) or mes_padrao
+
+    # Painéis HTML costumam trazer os dados em listas JavaScript e montar a tabela no navegador
+    listas = ler_listas_js(codigo, nome, mes)
+    if listas is not None:
+        return listas
     tabelas = grade_do_html(codigo)
     if not tabelas:
         return _ler_texto_livre(texto_pagina, nome, mes)
@@ -283,6 +306,106 @@ def ler_html(codigo: str, nome: str, mes_padrao: str | None) -> ResultadoImporta
     if not com_dados:
         return _juntar(resultados)
     return _juntar(com_dados)
+
+
+_RE_LISTA = re.compile(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*\[(.*?)\]\s*;", re.S)
+_RE_OBJETO = re.compile(r"\{([^{}]*)\}")
+_RE_PAR = re.compile(r"""([A-Za-z_$][\w$]*|"[^"]*"|'[^']*')\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|-?\d+(?:\.\d+)?)""")
+
+
+def grades_js(codigo: str) -> dict[str, list[list]]:
+    """Listas de objetos JavaScript (const dados = [{nome:"...", cotas:10}, ...]) como grades."""
+    grades = {}
+    for nome_lista, corpo in _RE_LISTA.findall(codigo):
+        objetos = []
+        for obj in _RE_OBJETO.findall(corpo):
+            pares = {}
+            for chave, valor in _RE_PAR.findall(obj):
+                chave = chave.strip("\"'")
+                if valor[:1] in "\"'":
+                    valor = valor[1:-1].replace("\\'", "'").replace('\\"', '"')
+                else:
+                    valor = float(valor)
+                pares[chave] = valor
+            if pares:
+                objetos.append(pares)
+        if not objetos:
+            continue
+        chaves = list(dict.fromkeys(k for o in objetos for k in o))
+        # "cestasRecebidas" -> "cestas Recebidas", para casar com os apelidos das colunas
+        cabecalho = [re.sub(r"(?<=[a-z])(?=[A-Z])", " ", k) for k in chaves]
+        grades[nome_lista] = [cabecalho, *[[o.get(k, "") for k in chaves] for o in objetos]]
+    return grades
+
+
+def ler_listas_js(codigo: str, nome: str, mes: str | None) -> ResultadoImportacao | None:
+    resultados = []
+    for nome_lista, grade in grades_js(codigo).items():
+        r = interpretar_grade(grade, mes, origem=f"{nome} [{nome_lista}]")
+        if not r.dados.empty:
+            resultados.append(r)
+    if not resultados:
+        return None
+    r = _juntar(resultados)
+    df = r.dados
+    unidades, sas = df[df["tipo"] != "SAS"], df[df["tipo"] == "SAS"]
+    if not unidades.empty and not sas.empty and unidades["sas"].isna().all():
+        grupos, acertos = atribuir_sas(unidades, sas)
+        if grupos is not None:
+            df.loc[unidades.index, "sas"] = grupos
+            if acertos < 0.8:
+                r.avisos.append(f"{nome}: a SAS de algumas unidades foi deduzida com pouca segurança "
+                                "(as somas não batem com os totais das SAS). Confira a coluna SAS na prévia.")
+    return r
+
+
+_PALAVRAS_GENERICAS = {"sas", "cras", "creas", "centro", "pop", "de", "do", "da", "dos", "das", "ii", "iii"}
+
+
+def _palavras(nome: str) -> set[str]:
+    return {p for p in re.split(r"[^a-z0-9]+", normalizar(nome)) if len(p) > 1} - _PALAVRAS_GENERICAS
+
+
+def atribuir_sas(unidades: pd.DataFrame, sas: pd.DataFrame) -> tuple[list[str] | None, float]:
+    """Descobre a SAS de cada unidade quando o arquivo lista as SAS e, separadamente, as unidades
+    na mesma ordem (sem dizer a qual SAS cada unidade pertence).
+
+    Divide a lista de unidades em blocos consecutivos — um por SAS — de modo que a soma de cada
+    bloco fique o mais próxima possível dos valores da SAS. Retorna a SAS de cada unidade e a
+    fração de SAS cujo bloco bate exatamente em pelo menos 4 dos 6 campos.
+    """
+    import numpy as np
+
+    u = unidades[list(CAMPOS)].fillna(0).to_numpy(float)
+    alvo = sas[list(CAMPOS)].fillna(0).to_numpy(float)
+    n, k = len(u), len(alvo)
+    if n < k:
+        return None, 0.0
+    acumulado = np.vstack([np.zeros(len(CAMPOS)), np.cumsum(u, axis=0)])
+    # desempate pelo nome: unidades zeradas na fronteira entre duas SAS ficam com a de nome parecido
+    nomes_sas = [_palavras(x) for x in sas["unidade"]]
+    nomes_unid = [_palavras(x) or {""} for x in unidades["unidade"]]
+    sem_nome = np.array([[0.01 * (1 - len(nu & ns) / len(nu)) for nu in nomes_unid] for ns in nomes_sas])
+    pena = np.hstack([np.zeros((k, 1)), np.cumsum(sem_nome, axis=1)])
+    custo = np.full((k + 1, n + 1), np.inf)
+    custo[0, 0] = 0
+    corte = np.zeros((k + 1, n + 1), dtype=int)
+    for j in range(1, k + 1):
+        for i in range(j, n - (k - j) + 1):
+            inicio = np.arange(j - 1, i)
+            c = (custo[j - 1, inicio] + np.abs(acumulado[i] - acumulado[inicio] - alvo[j - 1]).sum(axis=1)
+                 + pena[j - 1, i] - pena[j - 1, inicio])
+            melhor = int(np.argmin(c))
+            custo[j, i], corte[j, i] = c[melhor], inicio[melhor]
+    grupos, fim, exatos = [""] * n, n, 0
+    nomes = sas["unidade"].tolist()
+    for j in range(k, 0, -1):
+        inicio = corte[j, fim]
+        grupos[inicio:fim] = [nomes[j - 1]] * (fim - inicio)
+        iguais = np.isclose(acumulado[fim] - acumulado[inicio], alvo[j - 1]).sum()
+        exatos += iguais >= 4
+        fim = inicio
+    return grupos, exatos / k
 
 
 def ler_pdf(conteudo: bytes, nome: str, mes_padrao: str | None) -> ResultadoImportacao:
@@ -395,15 +518,17 @@ def finalizar(r: ResultadoImportacao) -> ResultadoImportacao:
     if chave.duplicated().any():
         r.avisos.append("Unidades repetidas no mesmo mês foram somadas.")
         df = df.assign(_ord=range(len(df)), _chave=chave)
-        agg = {c: "sum" for c in CAMPOS} | {"mes": "first", "unidade": "first", "tipo": "first", "_ord": "first"}
+        agg = {c: "sum" for c in CAMPOS} | {k: "first" for k in ("mes", "sas", "unidade", "tipo", "_ord")}
         df = (df.groupby("_chave").agg(agg).sort_values("_ord").drop(columns="_ord")
               .reset_index(drop=True)[COLUNAS])
     for mes, total in r.totais_informados.items():
         parte = df if not mes else df[df["mes"] == mes]
+        # o total do arquivo corresponde à soma das SAS, quando elas existem; senão, à das unidades
+        parte = parte[parte["tipo"] == "SAS"] if (parte["tipo"] == "SAS").any() else parte
         for campo, valor in total.items():
             soma = parte[campo].sum()
             if abs(soma - valor) > 0.5:
                 r.avisos.append(f"{mes or 'Arquivo'}: o total informado de {CAMPOS[campo]} ({valor:,.0f}) "
-                                f"difere da soma das unidades ({soma:,.0f}).".replace(",", "."))
+                                f"difere da soma das linhas ({soma:,.0f}).".replace(",", "."))
     r.dados = df
     return r

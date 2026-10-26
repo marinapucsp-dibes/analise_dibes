@@ -5,13 +5,15 @@ from __future__ import annotations
 import pandas as pd
 import plotly.graph_objects as go
 
-from .analise import INDICADORES
+from .analise import INDICADORES, PERCENTUAIS
 from .config import CAMPOS, rotulo_mes
 
 # Paleta categórica em ordem fixa (validada para daltonismo nos pares adjacentes)
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
 COR_CAMPO = dict(zip(CAMPOS, SERIES))
-COR_TIPO = {"CRAS": SERIES[0], "CREAS": SERIES[1], "Total SAS": SERIES[2]}
+COR_TIPO = {"CRAS": SERIES[0], "CREAS": SERIES[1], "Centro POP": SERIES[2], "Outro": SERIES[3],
+            "SAS": SERIES[0], "Total Geral": SERIES[6]}
+ORDEM_TIPOS = ["SAS", "CRAS", "CREAS", "Centro POP", "Outro"]
 SEQUENCIAL = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
 TINTA_MUDA = "#898781"
 GRADE = "rgba(137,135,129,0.25)"
@@ -56,9 +58,9 @@ def evolucao_campos(total: pd.DataFrame, campos: list[str] | None = None, titulo
 
 
 def evolucao_indicador(series: dict[str, pd.DataFrame], indicador: str, titulo: str = "") -> go.Figure:
-    """Um indicador ao longo dos meses para Total SAS, CRAS e CREAS."""
+    """Um indicador ao longo dos meses para Total Geral, CRAS e CREAS."""
     fig = go.Figure()
-    pct = indicador in ("uso_cota", "atendimento_demanda", "atendimento_solicitacao")
+    pct = indicador in PERCENTUAIS
     for nome, df in series.items():
         if df.empty:
             continue
@@ -79,7 +81,7 @@ def barras_unidades(df_mes: pd.DataFrame, campo: str, titulo: str = "") -> go.Fi
     rotulo = CAMPOS.get(campo) or INDICADORES.get(campo, campo)
     pct = "%" in rotulo
     fig = go.Figure()
-    for tipo in ["CRAS", "CREAS"]:
+    for tipo in ORDEM_TIPOS:
         parte = d[d["tipo"] == tipo]
         if parte.empty:
             continue
@@ -112,7 +114,7 @@ def comparativo_unidades(df_mes: pd.DataFrame, campos: list[str], titulo: str = 
 def mapa_calor(df: pd.DataFrame, campo: str, titulo: str = "") -> go.Figure:
     """Unidades × meses, intensidade = valor do campo."""
     tabela = df.pivot_table(index="unidade", columns="mes", values=campo, aggfunc="sum")
-    tabela = tabela.loc[sorted(tabela.index, key=lambda u: ("CREAS" in u.upper(), u))]
+    tabela = tabela.loc[sorted(tabela.index)]
     rotulo = CAMPOS.get(campo) or INDICADORES.get(campo, campo)
     fig = go.Figure(go.Heatmap(
         z=tabela.values, x=_eixo_meses(tabela.columns), y=tabela.index,
@@ -125,9 +127,9 @@ def mapa_calor(df: pd.DataFrame, campo: str, titulo: str = "") -> go.Figure:
 
 
 def tipo_mensal(tipos: pd.DataFrame, campo: str, titulo: str = "") -> go.Figure:
-    """Barras empilhadas CRAS + CREAS por mês (a altura total é o Total SAS)."""
+    """Barras empilhadas por tipo de unidade, por mês (a altura total é a soma das unidades)."""
     fig = go.Figure()
-    for tipo in ["CRAS", "CREAS"]:
+    for tipo in ORDEM_TIPOS:
         parte = tipos[tipos["tipo"] == tipo]
         if parte.empty:
             continue
@@ -141,7 +143,7 @@ def tipo_mensal(tipos: pd.DataFrame, campo: str, titulo: str = "") -> go.Figure:
 
 
 def perfil_mes(linha: pd.Series, titulo: str = "") -> go.Figure:
-    """Os seis campos de um mês lado a lado (Total SAS, um tipo ou uma unidade)."""
+    """Os seis campos de um mês lado a lado (Total Geral, uma SAS, um tipo ou uma unidade)."""
     campos = list(CAMPOS)
     fig = go.Figure(go.Bar(
         x=[CAMPOS[c] for c in campos], y=[linha[c] for c in campos],

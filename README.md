@@ -14,8 +14,14 @@ com gráficos, indicadores e alertas de conferência.
 | Quantidade de Recibos Emitidos | |
 | Quantidade de Cestas Concedidas | |
 
-Todos os campos são analisados em três níveis: **Total SAS** (soma de todas as unidades),
-**Total CRAS / Total CREAS** e **cada unidade** (CRAS ou CREAS individualmente).
+Também são aceitos os nomes usados no painel mensal da Secretaria: *Cotas*, *Cestas Recebidas*
+(= Quantidade Solicitada), *Demanda pelo Benefício*, *Registros de Atend. Técnico* (= Atendimento Social),
+*Recibos Válidos* e *Cestas Entregues* (= Cestas Concedidas).
+
+Os campos são analisados em quatro níveis: **Total Geral** (município), **cada SAS** (Supervisão de
+Assistência Social), **Total CRAS / CREAS / Centro POP** e **cada unidade**. Quando o arquivo informa o
+valor da SAS, ele é usado nos totais (pode incluir cota ainda não distribuída às unidades); senão, as
+unidades são somadas.
 
 ## Como instalar e abrir
 
@@ -63,7 +69,10 @@ Formatos aceitos:
 - **Excel** (`.xlsx`, `.xls`, `.ods`) — pode ter **uma aba por mês** (ex.: “Março 2026”); cada aba é lida separadamente.
 - **CSV** (separador `;`, `,` ou tabulação; números no padrão brasileiro `1.234,5`).
 - **PDF** — tabelas do documento; se o PDF não tiver tabela desenhada, as linhas de texto são lidas.
-- **HTML** — envie o arquivo `.html` ou **cole o código** (página inteira ou só a `<table>`).
+- **HTML** — envie o arquivo `.html` ou **cole o código** (página inteira ou só a `<table>`). Também lê
+  painéis cujos dados ficam em listas JavaScript (`const sasData = [...]`, `const crasData = [...]`),
+  como o painel mensal da Secretaria. Quando o painel lista as SAS e, separadamente, as unidades na mesma
+  ordem, o sistema descobre a SAS de cada unidade pelas somas (e pelo nome, nos empates).
 - **Digitação manual** — tabela já preenchida com as unidades cadastradas.
 
 O sistema localiza sozinho a linha de cabeçalho e reconhece variações de nome
@@ -72,42 +81,46 @@ O sistema localiza sozinho a linha de cabeçalho e reconhece variações de nome
 
 - O **mês** é obtido do nome do arquivo, do nome da aba, do título do documento ou de uma coluna “Mês/Competência”.
   Se não houver, usa o mês escolhido na tela.
-- O **tipo** (CRAS/CREAS) é deduzido do nome da unidade e pode ser corrigido na prévia.
-- Linhas de **total** (“Total”, “Total SAS”) não são gravadas: o sistema recalcula o total e
-  **avisa se a soma das unidades não bate** com o total informado no arquivo.
+- O **tipo** (SAS, CRAS, CREAS, Centro POP) é deduzido do nome e pode ser corrigido na prévia, assim como
+  a **SAS** de cada unidade. Unidades sem SAS no arquivo recebem a SAS da importação anterior.
+- Linhas de **total** (“Total”, “Total Geral”) não são gravadas: o sistema recalcula o total e
+  **avisa se a soma não bate** com o total informado no arquivo.
 - Antes de salvar, a **prévia é editável**. Reimportar um mês substitui os dados das mesmas unidades.
 
 ## Páginas
 
-- **📊 Painel do mês** — os seis campos com variação em relação ao mês anterior, indicadores, ranking das
-  unidades, comparativo Cota × Demanda × Concedidas e resumo CRAS × CREAS × Total SAS.
-- **📈 Evolução mensal** — linhas mês a mês por recorte, indicadores (SAS × CRAS × CREAS),
-  participação de CRAS e CREAS no total e mapa de calor por unidade.
-- **⚠️ Alertas** — conferência automática: concessão acima da cota, recibos ≠ cestas,
-  demanda maior que a cota, concedidas acima do solicitado, unidade sem dados, baixo uso da cota
-  e variação forte em relação ao mês anterior.
+- **📊 Painel do mês** — os seis campos com variação em relação ao mês anterior e indicadores, para o
+  Total Geral, uma SAS, um tipo de unidade ou uma unidade; ranking e comparativo entre SAS ou entre
+  unidades (com filtro por SAS); resumo por tipo e tabelas por SAS e por unidade.
+- **📈 Evolução mensal** — linhas mês a mês por recorte, indicadores (Total Geral × CRAS × CREAS),
+  participação de cada tipo de unidade e mapa de calor por SAS ou por unidade.
+- **⚠️ Alertas** — conferência automática de SAS e unidades: concessão acima da cota, mais recibos que
+  cestas, recibos sem registro de atendimento social, demanda maior que a cota, concessões sem cota na
+  unidade, SAS diferente da soma das unidades, unidade sem dados, baixo uso da cota e variação forte.
 - **🗂️ Histórico e relatório** — **relatório mensal em PDF para impressão**, tabela completa,
-  exclusão de meses/unidades e download do **relatório em Excel** (abas Total SAS, CRAS x CREAS,
-  Por unidade e Alertas) e dos dados em CSV.
+  exclusão de meses/unidades e download do **relatório em Excel** (abas Total Geral, Por SAS,
+  CRAS x CREAS, Por unidade e Alertas) e dos dados em CSV.
 
 ### Relatório para impressão (PDF)
 
 Botão **🖨️ Relatório do mês (PDF)** no Painel do mês e em Histórico e relatório. A4 paisagem, com:
-1. Resumo do Total SAS com comparação ao mês anterior e indicadores de SAS, CRAS e CREAS;
-2. Tabela de todas as unidades com subtotais CRAS, CREAS e Total SAS, e gráfico Cota × Demanda × Concedidas;
-3. Evolução dos últimos 12 meses (gráficos e tabela);
-4. Alertas de conferência do mês.
+1. Resumo do Total Geral com comparação ao mês anterior e indicadores por tipo de unidade;
+2. Tabela e gráfico por SAS;
+3. Tabela de todas as unidades (com a SAS) e subtotais por tipo;
+4. Evolução dos últimos 12 meses (gráficos e tabela);
+5. Alertas de conferência do mês (críticos e de atenção).
 
 ### Indicadores calculados
 
 | Indicador | Fórmula |
 |---|---|
 | Uso da cota (%) | Cestas concedidas ÷ Cota disponível |
-| Atendimento da demanda (%) | Cestas concedidas ÷ Demanda registrada |
-| Atendimento das solicitações (%) | Cestas concedidas ÷ Quantidade solicitada |
+| Concessão sobre a demanda (%) | Cestas concedidas ÷ Demanda registrada |
+| Atendimento técnico sobre a demanda (%) | Atendimento social ÷ Demanda registrada |
 | Saldo da cota | Cota disponível − Cestas concedidas |
 | Demanda reprimida | Demanda registrada − Cestas concedidas (mínimo 0) |
-| Recibos − cestas | Recibos emitidos − Cestas concedidas (deve ser 0) |
+| Recibos sem registro de atendimento | Recibos − Atendimento social (mínimo 0) |
+| Cestas sem recibo | Cestas concedidas − Recibos (mínimo 0) |
 
 ## Arquivos de exemplo
 

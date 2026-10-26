@@ -12,7 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
-from sqlalchemy import Column, Float, MetaData, String, Table, create_engine, delete, select
+from sqlalchemy import Column, Float, MetaData, String, Table, create_engine, delete, inspect, select, text
 from sqlalchemy.engine import Engine
 
 from .config import CAMPOS
@@ -24,7 +24,8 @@ registros = Table(
     "registros", metadados,
     Column("mes", String(7), primary_key=True),
     Column("unidade", String(200), primary_key=True),
-    Column("tipo", String(10), nullable=False),
+    Column("tipo", String(20), nullable=False),
+    Column("sas", String(200)),
     *[Column(c, Float) for c in CAMPOS],
     Column("arquivo", String(500)),
     Column("importado_em", String(19)),
@@ -52,6 +53,10 @@ def _engine(url: str) -> Engine:
         url = f"sqlite:///{url}"
     engine = create_engine(url, pool_pre_ping=True)
     metadados.create_all(engine)
+    # bancos criados antes da coluna SAS existir
+    if "sas" not in {c["name"] for c in inspect(engine).get_columns("registros")}:
+        with engine.begin() as con:
+            con.execute(text("ALTER TABLE registros ADD COLUMN sas VARCHAR(200)"))
     return engine
 
 
@@ -60,6 +65,7 @@ def salvar(df: pd.DataFrame, arquivo: str = "", url: str | None = None) -> int:
     agora = datetime.now().isoformat(timespec="seconds")
     linhas = [
         {"mes": r.mes, "unidade": r.unidade.strip(), "tipo": r.tipo, "arquivo": arquivo, "importado_em": agora,
+         "sas": (str(r.sas).strip() or None) if pd.notna(r.sas) else None,
          **{c: None if pd.isna(getattr(r, c)) else float(getattr(r, c)) for c in CAMPOS}}
         for r in df.itertuples(index=False)
     ]
@@ -75,6 +81,13 @@ def carregar(url: str | None = None) -> pd.DataFrame:
     consulta = select(registros).order_by(registros.c.mes, registros.c.tipo, registros.c.unidade)
     with conectar(url).connect() as con:
         return pd.read_sql(consulta, con)
+
+
+def mapa_sas(url: str | None = None) -> dict[str, str]:
+    """SAS de cada unidade, segundo a importação mais recente que a informou."""
+    df = carregar(url)
+    df = df[df["sas"].notna() & (df["tipo"] != "SAS")].sort_values("mes")
+    return dict(zip(df["unidade"].str.upper(), df["sas"]))
 
 
 def excluir_mes(mes: str, url: str | None = None) -> int:

@@ -13,21 +13,31 @@ CAMPOS = {
 # Apelidos (já normalizados: minúsculas, sem acento) que identificam cada coluna.
 # A busca é feita por "contém", na ordem: o primeiro apelido encontrado vence.
 APELIDOS = {
-    "cota_disponivel": ["cota disponivel", "cota"],
-    "quantidade_solicitada": ["quantidade solicitada", "qtd solicitada", "qtde solicitada", "solicitad"],
-    "demanda_registrada": ["demanda registrada", "demanda"],
-    "atendimento_social": ["atendimento social", "atendimentos sociais", "atendimento"],
-    "recibos_emitidos": ["quantidade de recibos", "recibos emitidos", "recibo"],
-    "cestas_concedidas": ["cestas concedidas", "quantidade de cestas", "concedid"],
+    "cota_disponivel": ["cota disponivel", "cotas", "cota"],
+    "quantidade_solicitada": ["quantidade solicitada", "qtd solicitada", "qtde solicitada", "solicitad",
+                              "cestas recebidas", "recebidas"],
+    "demanda_registrada": ["demanda registrada", "demanda pelo beneficio", "demanda"],
+    "atendimento_social": ["atendimento social", "registros de atendimento tecnico", "registros de atend",
+                           "atendimento tecnico", "atend. tecnico", "atendimentos sociais", "atendimento"],
+    "recibos_emitidos": ["quantidade de recibos", "recibos emitidos", "recibos validos", "recibo"],
+    "cestas_concedidas": ["cestas concedidas", "quantidade de cestas", "cestas entregues", "entregues", "concedid"],
 }
 
-APELIDOS_UNIDADE = ["unidade", "cras/creas", "equipamento", "servico", "territorio", "local", "nome", "cras", "creas"]
+# Colunas calculadas nos relatórios de origem, que o sistema recalcula (não são importadas)
+IGNORAR_COLUNAS = ["sem registro", "estoque", "taxa", "%"]
+
+APELIDOS_UNIDADE = ["unidade", "cras/creas", "equipamento", "servico", "territorio", "local", "nome", "name",
+                    "cras", "creas"]
+APELIDOS_SAS = ["sas", "supervisao"]
 APELIDOS_MES = ["mes", "competencia", "referencia", "periodo"]
 
 # Linhas de total que não são unidades (são recalculadas pelo sistema)
-PALAVRAS_TOTAL = ["total", "sas", "soma", "geral"]
+PALAVRAS_TOTAL = ["total", "soma", "geral"]
 
-TIPOS = ["CRAS", "CREAS"]
+# "SAS" = linha de uma Supervisão de Assistência Social (soma das suas unidades)
+TIPOS = ["SAS", "CRAS", "CREAS", "Centro POP", "Outro"]
+TIPOS_UNIDADE = TIPOS[1:]
+SEM_SAS = "(sem SAS)"
 
 MESES_PT = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho",
             "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]

@@ -78,19 +78,19 @@ def test_banco_analise_e_relatorio(tmp_path):
     banco.salvar(importador.importar_arquivo(f.read_bytes(), f.name).dados, f.name, caminho)
     assert len(banco.carregar(caminho)) == len(df)
 
-    total = analise.total_sas(df)
+    total = analise.total_geral(df)
     tipos = analise.por_tipo(df)
     soma_tipos = tipos.groupby("mes")["cestas_concedidas"].sum().values
     assert (total["cestas_concedidas"].values == soma_tipos).all()
     assert total["uso_cota"].between(0, 200).all()
 
     alertas = analise.alertas(df, "2026-09")
-    assert set(alertas.columns) == {"Gravidade", "Unidade", "Tipo", "Regra", "Detalhe"}
-    assert "Recibos diferentes das cestas concedidas" in set(alertas["Regra"])
+    assert set(alertas.columns) == {"Gravidade", "Unidade", "Tipo", "SAS", "Regra", "Detalhe"}
+    assert "Demanda maior que a cota" in set(alertas["Regra"])
 
     xlsx = relatorio.gerar_excel(df)
     abas = pd.read_excel(io.BytesIO(xlsx), sheet_name=None)
-    assert {"Total SAS", "CRAS x CREAS", "Por unidade", "Alertas"} <= set(abas)
+    assert {"Total Geral", "CRAS x CREAS", "Por unidade", "Alertas"} <= set(abas)
 
     assert banco.excluir_mes("2026-09", caminho) == 7
 
@@ -106,3 +106,77 @@ def test_relatorio_pdf(tmp_path):
     assert pdf.startswith(b"%PDF")
     # o primeiro mês não tem mês anterior nem evolução: também precisa funcionar
     assert relatorio_pdf.gerar_pdf(df, "2026-01").startswith(b"%PDF")
+
+
+# Painel HTML no formato da Secretaria: tabela vazia, dados em listas JavaScript (SAS e unidades na
+# mesma ordem, sem dizer a qual SAS cada unidade pertence). Valores fictícios.
+PAINEL_JS = """<html><head><title>Dashboard SAS - Auxílio Alimentação - Março/2026</title>
+<style>.x{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}</style></head><body>
+<table class="data-table"><thead><tr><th>Unidade SAS</th><th>Cotas</th><th>Cestas Recebidas</th>
+<th>Demanda pelo Benefício</th><th>Registros de Atend. Técnico</th><th>Recibos Válidos</th>
+<th>Cestas Entregues</th><th>Fam. Sem Registro de Atend. Social</th><th>Cestas em Estoque</th></tr></thead>
+<tbody id="tableBody"></tbody></table>
+<p>Período 01/01/2026 a 31/01/2026</p>
+<script>
+const sasData = [
+  {name:"SAS NORTE - NO",cotas:100,cestasRecebidas:90,demanda:80,atendimento:70,recibosValidos:75,entregues:78},
+  {name:"SAS VILA SUL - VS",cotas:50,cestasRecebidas:50,demanda:40,atendimento:30,recibosValidos:30,entregues:33},
+  {name:"SAS VILA LESTE",cotas:60,cestasRecebidas:0,demanda:20,atendimento:20,recibosValidos:20,entregues:20}
+];
+const crasData = [
+  {name:"CRAS NORTE",cotas:70,cestasRecebidas:60,demanda:60,atendimento:50,recibosValidos:55,entregues:57},
+  {name:"CRAS NORTE II",cotas:30,cestasRecebidas:30,demanda:20,atendimento:20,recibosValidos:20,entregues:21},
+  {name:"CREAS NORTE",cotas:0,cestasRecebidas:0,demanda:0,atendimento:0,recibosValidos:0,entregues:0},
+  {name:"CRAS VILA SUL",cotas:50,cestasRecebidas:50,demanda:38,atendimento:30,recibosValidos:30,entregues:33},
+  {name:"CENTRO POP VILA SUL",cotas:0,cestasRecebidas:0,demanda:2,atendimento:0,recibosValidos:0,entregues:0},
+  {name:"CREAS VILA SUL",cotas:0,cestasRecebidas:0,demanda:0,atendimento:0,recibosValidos:0,entregues:0},
+  {name:"CRAS M'BOI LESTE",cotas:0,cestasRecebidas:0,demanda:20,atendimento:20,recibosValidos:20,entregues:20}
+];
+function populateTable(data){ data.forEach(item=>{}); }
+</script></body></html>"""
+
+
+def test_painel_html_com_listas_js():
+    r = importador.importar_html_colado(PAINEL_JS)
+    d = r.dados
+    assert not r.avisos
+    assert set(d["mes"]) == {"2026-03"}  # o título, e não o período do rodapé
+    assert d["tipo"].value_counts().to_dict() == {"SAS": 3, "CRAS": 4, "CREAS": 2, "Centro POP": 1}
+    sas = d.set_index("unidade")["sas"]
+    # as unidades zeradas na fronteira ficam com a SAS de nome parecido
+    assert sas["CREAS NORTE"] == "SAS NORTE - NO"
+    assert sas["CREAS VILA SUL"] == "SAS VILA SUL - VS"
+    assert sas["CRAS M'BOI LESTE"] == "SAS VILA LESTE"
+    assert d.set_index("unidade").loc["CRAS NORTE II", "quantidade_solicitada"] == 30  # "Cestas Recebidas"
+
+
+def test_totais_usam_valor_informado_da_sas():
+    d = importador.importar_html_colado(PAINEL_JS).dados
+    total = analise.total_geral(d).iloc[0]
+    # a cota de 60 da SAS VILA LESTE não foi distribuída à unidade, mas entra no total
+    assert total["cota_disponivel"] == 210
+    assert total["unidades"] == 7
+    assert total["recibos_sem_atendimento"] == 5
+    por_sas = analise.por_sas(d).set_index("sas")
+    assert por_sas.loc["SAS VILA LESTE", "cota_disponivel"] == 60
+    assert analise.por_tipo(d).set_index("tipo").loc["CRAS", "cestas_concedidas"] == 131
+    regras = set(analise.alertas(d, "2026-03")["Regra"])
+    assert "SAS diferente da soma das unidades" in regras
+    assert "Recibos sem registro de atendimento social" in regras
+
+
+def test_banco_antigo_ganha_coluna_sas(tmp_path):
+    import sqlite3
+
+    caminho = tmp_path / "antigo.db"
+    with sqlite3.connect(caminho) as con:
+        con.execute("CREATE TABLE registros (mes TEXT, unidade TEXT, tipo TEXT, cota_disponivel REAL, "
+                    "quantidade_solicitada REAL, demanda_registrada REAL, atendimento_social REAL, "
+                    "recibos_emitidos REAL, cestas_concedidas REAL, arquivo TEXT, importado_em TEXT, "
+                    "PRIMARY KEY (mes, unidade))")
+        con.execute("INSERT INTO registros VALUES ('2026-01','CRAS A','CRAS',1,1,1,1,1,1,'x','y')")
+    df = banco.carregar(caminho)
+    assert "sas" in df.columns and len(df) == 1
+    novo = importador.importar_html_colado(PAINEL_JS).dados
+    banco.salvar(novo, "painel", caminho)
+    assert banco.mapa_sas(caminho)["CREAS NORTE"] == "SAS NORTE - NO"

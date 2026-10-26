@@ -1,4 +1,4 @@
-"""Painel de análise das concessões de cestas básicas — SAS / CRAS / CREAS.
+"""Painel de análise das concessões de cestas básicas — Total Geral, SAS, CRAS e CREAS.
 
 Execute com:  streamlit run app.py
 """
@@ -12,7 +12,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from dibes.config import CAMPOS, MESES_PT, TIPOS, rotulo_mes
+from dibes.config import CAMPOS, MESES_PT, SEM_SAS, TIPOS, TIPOS_UNIDADE, rotulo_mes
 
 st.set_page_config(page_title="Cestas Básicas · SAS", page_icon="🧺", layout="wide")
 
@@ -100,19 +100,52 @@ def escolher_mes_existente(df: pd.DataFrame, chave: str, rotulo="Mês de referê
     return st.selectbox(rotulo, meses, format_func=rotulo_mes, key=chave)
 
 
+def opcoes_recorte(df: pd.DataFrame) -> tuple[list[str], dict[str, str]]:
+    """Recortes possíveis (Total Geral, totais por tipo, cada SAS, cada unidade) e seus rótulos."""
+    tipos = [t for t in TIPOS_UNIDADE if t in set(df["tipo"])]
+    sas = sorted(analise.por_sas(df)["sas"].unique()) if analise.tem_sas(df) else []
+    und = analise.unidades(df).drop_duplicates("unidade").sort_values(["sas", "unidade"])
+    opcoes = ["Total Geral", *[f"Total {t}" for t in tipos], *sas, *und["unidade"]]
+    rotulos = {"Total Geral": "Total Geral (município)", **{s_: f"SAS · {s_}" for s_ in sas}}
+    for u, s_ in zip(und["unidade"], und["sas"]):
+        rotulos[u] = f"{u}  —  {s_}" if s_ != SEM_SAS else u
+    return opcoes, rotulos
+
+
 def escolher_recorte(df: pd.DataFrame, chave: str) -> str:
-    unidades = sorted(df["unidade"].unique(), key=lambda u: ("CREAS" in u.upper(), u))
-    return st.selectbox("Recorte", ["Total SAS", "Total CRAS", "Total CREAS", *unidades], key=chave)
+    opcoes, rotulos = opcoes_recorte(df)
+    return st.selectbox("Recorte", opcoes, format_func=lambda o: rotulos.get(o, o), key=chave,
+                        help="Total Geral, total de um tipo de unidade, uma SAS ou uma unidade.")
 
 
 def serie_do_recorte(df: pd.DataFrame, recorte: str) -> pd.DataFrame:
     """Tabela mensal (uma linha por mês) com campos e indicadores do recorte escolhido."""
-    if recorte == "Total SAS":
-        return analise.total_sas(df)
-    if recorte in ("Total CRAS", "Total CREAS"):
-        tipo = recorte.split()[1]
+    if recorte == "Total Geral":
+        return analise.total_geral(df)
+    if recorte.startswith("Total ") and recorte[6:] in TIPOS_UNIDADE:
+        tipo = recorte[6:]
         return analise.por_tipo(df).query("tipo == @tipo").reset_index(drop=True)
+    sas = analise.por_sas(df)
+    if recorte in set(sas["sas"]):
+        return sas[sas["sas"] == recorte].reset_index(drop=True)
     return analise.por_unidade(df[df["unidade"] == recorte]).sort_values("mes").reset_index(drop=True)
+
+
+def nivel_comparacao(df: pd.DataFrame, chave: str) -> pd.DataFrame:
+    """Escolhe entre comparar SAS ou unidades (com filtro de SAS). Retorna colunas unidade, tipo, sas…"""
+    com_sas = analise.tem_sas(df)
+    c1, c2 = st.columns([1, 2])
+    nivel = c1.radio("Comparar", ["SAS", "Unidades"] if com_sas else ["Unidades"], horizontal=True,
+                     key=f"{chave}_nivel")
+    if nivel == "SAS":
+        return analise.por_sas(df).assign(unidade=lambda d: d["sas"], tipo="SAS")
+    und = analise.por_unidade(df)
+    if com_sas:
+        lista = sorted(und["sas"].unique())
+        filtro = c2.selectbox("SAS", ["Todas as SAS", *lista], key=f"{chave}_sas")
+        if filtro != "Todas as SAS":
+            und = und[und["sas"] == filtro]
+    return und
 
 
 @st.cache_data(show_spinner="Gerando relatório…", ttl=60)
@@ -187,8 +220,9 @@ def pagina_importar():
     with aba_manual:
         st.write("Começa com as unidades já cadastradas; acrescente linhas no fim da tabela se precisar.")
         if st.button("Abrir tabela para digitação"):
-            unidades = (df_hist.drop_duplicates("unidade")[["unidade", "tipo"]] if not df_hist.empty
-                        else pd.DataFrame({"unidade": ["CRAS "], "tipo": ["CRAS"]}))
+            ultimo = df_hist[df_hist["mes"] == df_hist["mes"].max()] if not df_hist.empty else df_hist
+            unidades = (ultimo[["sas", "unidade", "tipo"]] if not df_hist.empty
+                        else pd.DataFrame({"sas": [None], "unidade": ["CRAS "], "tipo": ["CRAS"]}))
             base = unidades.assign(mes=mes_escolhido, **{c: None for c in CAMPOS})[importador.COLUNAS]
             resultado = importador.ResultadoImportacao(base.reset_index(drop=True))
             st.session_state["origem"] = "digitação manual"
@@ -198,6 +232,11 @@ def pagina_importar():
             resultado.dados["mes"] = mes_escolhido
         else:
             resultado.dados["mes"] = resultado.dados["mes"].fillna(mes_escolhido)
+        # unidades sem SAS no arquivo recebem a SAS que tinham nas importações anteriores
+        sem = resultado.dados["sas"].isna() & (resultado.dados["tipo"] != "SAS")
+        if sem.any() and not df_hist.empty:
+            mapa = banco.mapa_sas()
+            resultado.dados.loc[sem, "sas"] = resultado.dados.loc[sem, "unidade"].str.upper().map(mapa)
         st.session_state["previa"] = resultado
 
     previa: importador.ResultadoImportacao | None = st.session_state.get("previa")
@@ -208,14 +247,16 @@ def pagina_importar():
         st.warning(aviso, icon="⚠️")
     if previa.dados.empty:
         st.error("Nenhum dado reconhecido. Verifique se a tabela tem os nomes das colunas "
-                 "(Cota Disponível, Quantidade Solicitada, Demanda Registrada, Atendimento Social, "
-                 "Recibos Emitidos, Cestas Concedidas) e uma coluna com os nomes dos CRAS/CREAS.")
+                 "(Cota/Cotas, Quantidade Solicitada/Cestas Recebidas, Demanda, Atendimento Social/Atend. "
+                 "Técnico, Recibos Emitidos/Válidos, Cestas Concedidas/Entregues) e uma coluna com os nomes "
+                 "das unidades.")
         return
 
     editado = st.data_editor(
         previa.dados, num_rows="dynamic", width="stretch", hide_index=True, key=f"editor_{id(previa)}",
         column_config={
             "mes": st.column_config.TextColumn("Mês (AAAA-MM)", validate=r"^20\d{2}-(0[1-9]|1[0-2])$", required=True),
+            "sas": st.column_config.TextColumn("SAS", help="Supervisão a que a unidade pertence"),
             "unidade": st.column_config.TextColumn("Unidade", required=True),
             "tipo": st.column_config.SelectboxColumn("Tipo", options=TIPOS, required=True),
             **{c: st.column_config.NumberColumn(r, min_value=0, step=1) for c, r in CAMPOS.items()},
@@ -225,7 +266,7 @@ def pagina_importar():
     editado = editado[editado["unidade"].astype(str).str.strip() != ""]
     meses = sorted(editado["mes"].dropna().unique())
     resumo = editado.groupby("tipo")["unidade"].count().to_dict()
-    st.caption(f"{len(editado)} unidades · " + " · ".join(f"{k}: {v}" for k, v in resumo.items())
+    st.caption(f"{len(editado)} linhas · " + " · ".join(f"{k}: {v}" for k, v in resumo.items())
                + f" · mês(es): {', '.join(rotulo_mes(m) for m in meses)}")
 
     existentes = set(df_hist["mes"]) & set(meses) if not df_hist.empty else set()
@@ -275,35 +316,44 @@ def pagina_painel():
         col.metric(rotulo, fmt(linha[campo]), fmt_delta(linha[campo], None if ant is None else ant[campo]),
                    border=True)
     colunas = st.columns(4)
-    for col, ind in zip(colunas, ["uso_cota", "atendimento_demanda", "saldo_cota", "demanda_reprimida"]):
-        pct = "%" in analise.INDICADORES[ind]
+    piores_se_sobem = {"demanda_reprimida", "recibos_sem_atendimento", "cestas_sem_recibo"}
+    for col, ind in zip(colunas, ["uso_cota", "atendimento_tecnico", "recibos_sem_atendimento", "saldo_cota"]):
+        pct = ind in analise.PERCENTUAIS
         col.metric(analise.INDICADORES[ind], fmt(linha[ind], 1 if pct else 0, "%" if pct else ""),
                    fmt_delta(linha[ind], None if ant is None else ant[ind], pct=pct),
-                   delta_color="inverse" if ind == "demanda_reprimida" else "normal", border=True)
+                   delta_color="inverse" if ind in piores_se_sobem else "normal", border=True)
 
     st.plotly_chart(graficos.perfil_mes(linha, "Os seis campos no mês"), width="stretch", theme=None)
 
     st.divider()
-    st.subheader(f"CRAS e CREAS em {rotulo_mes(mes)}")
-    df_mes = analise.por_unidade(df[df["mes"] == mes])
+    do_mes = df[df["mes"] == mes]
+    st.subheader(f"Comparação entre SAS e unidades · {rotulo_mes(mes)}")
+    tabela = nivel_comparacao(do_mes, "painel")
     c1, c2 = st.columns([1, 3])
     opcoes = {**CAMPOS, **analise.INDICADORES}
     campo = c1.selectbox("Campo do ranking", list(opcoes), index=list(opcoes).index("cestas_concedidas"),
                          format_func=opcoes.get)
-    c2.plotly_chart(graficos.barras_unidades(df_mes, campo, f"{opcoes[campo]} por unidade"),
-                    width="stretch", theme=None)
-    comparar = st.multiselect("Comparar por unidade", list(CAMPOS), format_func=CAMPOS.get,
+    c2.plotly_chart(graficos.barras_unidades(tabela, campo, f"{opcoes[campo]}"), width="stretch", theme=None)
+    comparar = st.multiselect("Comparar campos lado a lado", list(CAMPOS), format_func=CAMPOS.get,
                               default=["cota_disponivel", "demanda_registrada", "cestas_concedidas"])
-    if comparar:
-        st.plotly_chart(graficos.comparativo_unidades(df_mes, comparar[:8]), width="stretch", theme=None)
+    if comparar and len(tabela) <= 40:
+        st.plotly_chart(graficos.comparativo_unidades(tabela, comparar), width="stretch", theme=None)
+    elif comparar:
+        st.caption("Para comparar campos lado a lado, escolha uma SAS no filtro acima (máximo de 40 unidades).")
 
-    tipos = analise.por_tipo(df[df["mes"] == mes])
-    total = analise.total_sas(df[df["mes"] == mes]).assign(tipo="Total SAS").drop(columns="unidades")
+    st.markdown("**Resumo por tipo de unidade**")
+    tipos = analise.por_tipo(do_mes)
+    total = analise.total_geral(do_mes).assign(tipo="Total Geral").drop(columns="unidades")
     resumo = pd.concat([tipos, total], ignore_index=True)
     st.dataframe(tabela_bonita(resumo[["tipo", *CAMPOS, *analise.INDICADORES]]), hide_index=True,
                  width="stretch", column_config=CONFIG_NUMEROS)
+    if analise.tem_sas(do_mes):
+        with st.expander("Tabela por SAS"):
+            st.dataframe(tabela_bonita(analise.por_sas(do_mes)[["sas", "unidades", *CAMPOS, *analise.INDICADORES]]),
+                         hide_index=True, width="stretch", column_config=CONFIG_NUMEROS)
     with st.expander("Tabela completa das unidades"):
-        st.dataframe(tabela_bonita(df_mes[["tipo", "unidade", *CAMPOS, *analise.INDICADORES]]),
+        und = analise.por_unidade(do_mes).sort_values(["sas", "unidade"])
+        st.dataframe(tabela_bonita(und[["sas", "tipo", "unidade", *CAMPOS, *analise.INDICADORES]]),
                      hide_index=True, width="stretch", column_config=CONFIG_NUMEROS)
 
 
@@ -326,20 +376,21 @@ def pagina_evolucao():
         st.plotly_chart(graficos.evolucao_campos(serie, campos, f"{recorte} · campos mês a mês"),
                         width="stretch", theme=None)
 
-    st.subheader("Indicadores: Total SAS × CRAS × CREAS")
+    st.subheader("Indicadores: Total Geral × CRAS × CREAS")
     ind = st.selectbox("Indicador", list(analise.INDICADORES), format_func=analise.INDICADORES.get)
     tipos = analise.por_tipo(df)
-    series = {"Total SAS": analise.total_sas(df), "CRAS": tipos[tipos["tipo"] == "CRAS"],
+    series = {"Total Geral": analise.total_geral(df), "CRAS": tipos[tipos["tipo"] == "CRAS"],
               "CREAS": tipos[tipos["tipo"] == "CREAS"]}
     st.plotly_chart(graficos.evolucao_indicador(series, ind), width="stretch", theme=None)
 
-    st.subheader("Participação de CRAS e CREAS no total")
+    st.subheader("Participação de cada tipo de unidade")
     campo = st.selectbox("Campo", list(CAMPOS), index=5, format_func=CAMPOS.get, key="evo_tipo")
     st.plotly_chart(graficos.tipo_mensal(tipos, campo), width="stretch", theme=None)
 
-    st.subheader("Mapa de calor por unidade")
+    st.subheader("Mapa de calor mês a mês")
+    tabela = nivel_comparacao(df, "evo_mapa")
     campo_mapa = st.selectbox("Campo", list(CAMPOS), index=5, format_func=CAMPOS.get, key="evo_mapa")
-    st.plotly_chart(graficos.mapa_calor(df, campo_mapa), width="stretch", theme=None)
+    st.plotly_chart(graficos.mapa_calor(tabela, campo_mapa), width="stretch", theme=None)
 
     with st.expander(f"Tabela mensal — {recorte}"):
         cols = ["mes", *CAMPOS, *analise.INDICADORES]
@@ -370,14 +421,19 @@ def pagina_alertas():
     st.dataframe(tabela[tabela["Gravidade"].isin(filtro)], hide_index=True, width="stretch")
     with st.expander("Como os alertas são calculados"):
         st.markdown("""
-- 🔴 **Concessão acima da cota** — cestas concedidas maiores que a cota disponível.
-- 🟠 **Recibos diferentes das cestas concedidas** — cada cesta deve ter um recibo.
-- 🟠 **Demanda maior que a cota** — indica necessidade de ampliar a cota da unidade.
-- 🟠 **Concedidas acima do solicitado** — possível erro de digitação.
-- 🟠 **Unidade sem dados no mês** — a unidade informou no mês anterior e não neste.
+As regras valem para cada SAS e cada unidade.
+
+- 🔴 **Concessão acima da cota** — cestas concedidas maiores que a cota (quando há cota registrada).
+- 🔴 **Mais recibos do que cestas** — cada recibo corresponde a pelo menos uma cesta.
+- 🟠 **Recibos sem registro de atendimento social** — mais recibos que atendimentos técnicos registrados.
+- 🟠 **Demanda maior que a cota** — indica necessidade de ampliar a cota.
+- 🟠 **Sem dados no mês** — informou no mês anterior e não neste.
+- 🔵 **Concessões sem cota na unidade** — a cota pode estar registrada só na SAS.
+- 🔵 **SAS diferente da soma das unidades** — valor informado para a SAS não bate com a soma dos seus CRAS/CREAS.
 - 🔵 **Baixo uso da cota** — menos de 50% da cota utilizada.
 - 🔵 **Variação forte nas concessões** — mudança acima do limite escolhido em relação ao mês anterior.
 """)
+
 
 
 def pagina_dados():
@@ -386,10 +442,11 @@ def pagina_dados():
         sem_dados()
     st.header("🗂️ Histórico e relatório")
     meses = sorted(df["mes"].unique())
-    st.caption(f"{len(meses)} meses · {df['unidade'].nunique()} unidades · {len(df)} registros")
+    st.caption(f"{len(meses)} meses · {analise.unidades(df)['unidade'].nunique()} unidades · "
+               f"{(df['tipo'] == 'SAS').groupby(df['unidade']).any().sum()} SAS · {len(df)} registros")
     with st.container(border=True):
         st.markdown("**🖨️ Relatório mensal para impressão (PDF)**")
-        st.caption("Resumo do Total SAS com comparação ao mês anterior, tabela de CRAS e CREAS, "
+        st.caption("Resumo do Total Geral com comparação ao mês anterior, tabelas por SAS e por unidade, "
                    "evolução dos últimos 12 meses e alertas de conferência.")
         c1, c2 = st.columns([2, 1])
         with c1:
@@ -406,7 +463,7 @@ def pagina_dados():
 
     filtro = st.multiselect("Filtrar meses", meses, format_func=rotulo_mes)
     vista = df[df["mes"].isin(filtro)] if filtro else df
-    st.dataframe(tabela_bonita(vista[["mes", "tipo", "unidade", *CAMPOS, "arquivo", "importado_em"]])
+    st.dataframe(tabela_bonita(vista[["mes", "sas", "tipo", "unidade", *CAMPOS, "arquivo", "importado_em"]])
                  .rename(columns={"arquivo": "Arquivo de origem", "importado_em": "Importado em"}),
                  hide_index=True, width="stretch", column_config=CONFIG_NUMEROS)
 
@@ -438,13 +495,13 @@ PAGINAS = {
 
 with st.sidebar:
     st.title("🧺 Cestas Básicas")
-    st.caption("Monitoramento mensal das concessões · Total SAS, CRAS e CREAS")
+    st.caption("Monitoramento mensal das concessões · Total Geral, SAS, CRAS e CREAS")
     inicial = 0 if not dados().empty else list(PAGINAS).index("📥 Importar dados")
     escolha = st.radio("Navegação", list(PAGINAS), index=inicial, label_visibility="collapsed")
     d = dados()
     if not d.empty:
         st.divider()
         st.caption(f"Histórico: {rotulo_mes(d['mes'].min())} a {rotulo_mes(d['mes'].max())} · "
-                   f"{d['unidade'].nunique()} unidades")
+                   f"{analise.unidades(d)['unidade'].nunique()} unidades")
 
 PAGINAS[escolha]()
