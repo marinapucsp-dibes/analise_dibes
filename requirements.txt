@@ -1,0 +1,9 @@
+streamlit>=1.40
+pandas>=2.2
+plotly>=5.20
+openpyxl>=3.1
+pdfplumber>=0.11
+beautifulsoup4>=4.12
+lxml>=5.0
+reportlab>=4.0   # apenas para gerar os exemplos em PDF
+pytest>=8.0
