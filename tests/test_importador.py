@@ -436,3 +436,22 @@ def test_mes_salvo_com_grafia_errada_e_corrigido_pelo_html_mais_recente():
                ("2026-09", "CRAS VILA CURUÇÁ", "código HTML colado")]
     df = pd.DataFrame(linhas, columns=["mes", "unidade", "arquivo"]).assign(tipo="CRAS", sas="SAS IT")
     assert analise.mapa_nomes(df) == {"CRAS VILA CURUÇA": "CRAS VILA CURUÇÁ"}
+
+
+def test_contexto_da_ia_com_meses_escolhidos(tmp_path):
+    from dibes import ia
+
+    caminho = tmp_path / "t.db"
+    for f in sorted(EXEMPLOS.iterdir()):
+        banco.salvar(importador.importar_arquivo(f.read_bytes(), f.name).dados, f.name, caminho)
+    df = banco.carregar(caminho)
+    # meses não seguidos: só Janeiro e Setembro entram
+    texto = ia.montar_contexto(df, ["2026-09", "2026-01"])
+    assert "Jan/2026" in texto and "Set/2026" in texto and "Mai/2026" not in texto
+    # um mês só: vem junto o anterior para comparação
+    assert "Ago/2026" in ia.montar_contexto(df, "2026-09")
+    # muitos meses: tabela de unidades enxuta, mas todos os meses presentes
+    todos = ia.montar_contexto(df, sorted(df["mes"].unique()))
+    assert all(r in todos for r in ("Jan/2026", "Mai/2026", "Set/2026")) and "Demanda Registrada;Atendimento" in todos
+    mil, custo = ia.estimar_custo(todos)
+    assert mil > 0 and custo > 0

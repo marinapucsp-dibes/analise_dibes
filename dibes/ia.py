@@ -50,6 +50,20 @@ concederam menos de 10% da cota.
 6. **Destaques positivos.**
 7. **Recomendações** — ações práticas e priorizadas para a gestão."""
 
+ROTEIRO_PERIODO = """Faça a análise técnica comparando os meses selecionados ({meses}), com estas seções:
+1. **Visão geral do período** — evolução dos principais números do Total Geral mês a mês e tendência.
+2. **Recibos sem registro de atendimento social** — SAS e unidades mais críticas (acima de 10%) e quem \
+melhorou ou piorou ao longo dos meses.
+3. **Estoque e uso da cota** — tendência do estoque, uso de estoque anterior e unidades que concederam \
+menos de 10% da cota de forma recorrente.
+4. **Demanda × atendimento** — evolução e onde a demanda não está sendo atendida.
+5. **Emergências** — se houver, volume por mês e ocorrências principais (em poucas frases).
+6. **Destaques positivos.**
+7. **Recomendações** — ações práticas e priorizadas para a gestão."""
+
+# acima disto, a tabela de unidades leva só as colunas principais (para não encarecer a análise)
+MESES_UNIDADES_COMPLETAS = 3
+
 
 def _csv(df: pd.DataFrame, colunas: list[str]) -> str:
     d = df[colunas].copy()
@@ -63,48 +77,81 @@ def _csv(df: pd.DataFrame, colunas: list[str]) -> str:
     return d.rename(columns=nomes).to_csv(index=False, sep=";")
 
 
-def montar_contexto(df: pd.DataFrame, mes: str, emergencias: pd.DataFrame | None = None) -> str:
-    """Resumo dos dados do mês (e do anterior) em texto, para enviar ao modelo."""
-    meses = sorted(df["mes"].unique())
-    anterior = analise.mes_anterior(meses, mes)
-    escopo = df[df["mes"].isin([m for m in (mes, anterior) if m])]
+def montar_contexto(df: pd.DataFrame, meses: str | list[str], emergencias: pd.DataFrame | None = None) -> str:
+    """Resumo dos dados dos meses escolhidos em texto, para enviar ao modelo.
+
+    Com um único mês, inclui também o mês anterior para comparação."""
+    if isinstance(meses, str):
+        anterior = analise.mes_anterior(sorted(df["mes"].unique()), meses)
+        meses = [m for m in (anterior, meses) if m]
+        cabecalho = f"Mês analisado: {rotulo_mes(meses[-1])}" + (
+            f" (mês anterior, para comparação: {rotulo_mes(anterior)})" if anterior else "")
+    else:
+        meses = sorted(meses)
+        cabecalho = "Meses selecionados para a análise: " + ", ".join(rotulo_mes(m) for m in meses)
+    ultimo = meses[-1]
+    escopo = df[df["mes"].isin(meses)]
     campos = list(CAMPOS)
     ind = ["estoque", "recibos_sem_atendimento", "pct_recibos_sem_atendimento", "uso_cota",
            "atendimento_tecnico", "demanda_reprimida"]
-    partes = [f"Mês analisado: {rotulo_mes(mes)}" + (f" (mês anterior: {rotulo_mes(anterior)})" if anterior else "")]
+    partes = [cabecalho]
+
+    def com_mes(d):
+        return d.sort_values("mes").assign(mes=d.sort_values("mes")["mes"].map(rotulo_mes))
 
     total = analise.total_geral(escopo)
-    partes.append("## Total Geral por mês\n" + _csv(total.assign(mes=total["mes"].map(rotulo_mes)),
-                                                    ["mes", *campos, *ind]))
+    partes.append("## Total Geral por mês\n" + _csv(com_mes(total), ["mes", *campos, *ind]))
     tipos = analise.por_tipo(escopo)
-    partes.append("## Por tipo de unidade\n" + _csv(tipos.assign(mes=tipos["mes"].map(rotulo_mes)),
-                                                    ["mes", "tipo", *campos, *ind]))
-    do_mes = df[df["mes"] == mes]
-    if analise.tem_sas(do_mes):
+    partes.append("## Por tipo de unidade\n" + _csv(com_mes(tipos), ["mes", "tipo", *campos, *ind]))
+    if analise.tem_sas(escopo):
         sas = analise.por_sas(escopo)
-        partes.append("## Por SAS\n" + _csv(sas.assign(mes=sas["mes"].map(rotulo_mes)),
-                                            ["mes", "sas", *campos, *ind]))
-    und = analise.por_unidade(do_mes).sort_values(["sas", "unidade"])
-    partes.append(f"## Unidades em {rotulo_mes(mes)}\n" + _csv(und, ["sas", "unidade", "tipo", *campos, *ind]))
+        partes.append("## Por SAS\n" + _csv(com_mes(sas), ["mes", "sas", *campos, *ind]))
+    und = analise.por_unidade(escopo).sort_values(["sas", "unidade", "mes"])
+    if len(meses) <= MESES_UNIDADES_COMPLETAS:
+        colunas_und = ["mes", "sas", "unidade", "tipo", *campos, *ind]
+    else:
+        colunas_und = ["mes", "sas", "unidade", "cota_disponivel", "quantidade_solicitada", "atendimento_social",
+                       "recibos_emitidos", "cestas_concedidas", "estoque", "pct_recibos_sem_atendimento"]
+    und = und.assign(mes=und["mes"].map(rotulo_mes))
+    partes.append("## Unidades por mês\n" + _csv(und, colunas_und))
     if emergencias is not None and not emergencias.empty:
-        e = emergencias[emergencias["mes"].isin([m for m in (mes, anterior) if m])]
+        e = emergencias[emergencias["mes"].isin(meses)].sort_values(["mes", "cestas"], ascending=[True, False])
         if not e.empty:
             partes.append("## Emergências (CPAS)\n" + e.assign(mes=e["mes"].map(rotulo_mes))
                           .rename(columns={"mes": "Mês", "ocorrencia": "Localidade/Ocorrência",
                                            "cestas": "Cestas"})[["Mês", "Localidade/Ocorrência", "Cestas"]]
                           .to_csv(index=False, sep=";"))
-    alertas = analise.alertas(df, mes)
+    # alertas detalhados do último mês; nos demais, só a contagem por regra
+    alertas = analise.alertas(df, ultimo)
     alertas = alertas[alertas["Gravidade"] != "Informativo"]
     if not alertas.empty:
-        partes.append("## Alertas automáticos (críticos e de atenção)\n" + alertas.to_csv(index=False, sep=";"))
+        partes.append(f"## Alertas automáticos de {rotulo_mes(ultimo)} (críticos e de atenção)\n"
+                      + alertas.to_csv(index=False, sep=";"))
+    if len(meses) > 1:
+        contagem = pd.concat([analise.alertas(df, m).assign(Mês=rotulo_mes(m)) for m in meses])
+        contagem = contagem[contagem["Gravidade"] != "Informativo"].groupby(["Mês", "Regra"], sort=False).size()
+        if not contagem.empty:
+            partes.append("## Quantidade de alertas por mês e regra\n"
+                          + contagem.rename("Quantidade").reset_index().to_csv(index=False, sep=";"))
     return "\n\n".join(partes)
 
 
-def analisar(df: pd.DataFrame, mes: str, pedido: str, api_key: str,
+def estimar_custo(contexto: str) -> tuple[int, float]:
+    """Estimativa grosseira: (mil tokens enviados, custo em US$ com ~3 mil tokens de resposta)."""
+    tokens = len(contexto) / 3.2
+    return round(tokens / 1000), tokens / 1e6 * 4 + 3000 / 1e6 * 20
+
+
+def analisar(df: pd.DataFrame, meses: str | list[str], pedido: str, api_key: str,
              emergencias: pd.DataFrame | None = None) -> Iterator[str]:
     """Envia os dados ao Claude e devolve o texto da análise aos poucos (streaming)."""
     client = anthropic.Anthropic(api_key=api_key)
-    conteudo = f"<dados>\n{montar_contexto(df, mes, emergencias)}\n</dados>\n\n{pedido.strip() or ROTEIRO_PADRAO}"
+    if isinstance(meses, list) and len(meses) > 1:
+        roteiro = ROTEIRO_PERIODO.format(meses=", ".join(rotulo_mes(m) for m in sorted(meses)))
+    else:
+        meses = meses[0] if isinstance(meses, list) else meses
+        roteiro = ROTEIRO_PADRAO
+    conteudo = f"<dados>\n{montar_contexto(df, meses, emergencias)}\n</dados>\n\n{pedido.strip() or roteiro}"
     with client.beta.messages.stream(
         model=MODELO,
         max_tokens=16000,

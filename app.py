@@ -631,21 +631,42 @@ def pagina_ia():
 4. Salve; o painel reinicia em cerca de 1 minuto.
 """)
         return
-    c1, c2 = st.columns([1, 2])
-    with c1:
-        mes = escolher_mes_existente(df, "ia_mes", "Mês a analisar")
-    with c2:
-        modo = st.radio("O que você quer?", ["Análise completa do mês", "Fazer uma pergunta"], horizontal=True)
+    disponiveis = sorted(df["mes"].unique(), reverse=True)
+    if "ia_meses" not in st.session_state or not set(st.session_state["ia_meses"]) <= set(disponiveis):
+        st.session_state["ia_meses"] = disponiveis[:2]
+    escolhidos = st.multiselect(
+        "Meses a analisar", disponiveis, format_func=rotulo_mes, key="ia_meses",
+        help="Escolha um mês (a IA compara com o anterior) ou vários meses, seguidos ou não "
+             "(ex.: só Janeiro e Setembro).")
+    c1, c2, c3, c4 = st.columns(4)
+    atalhos = {"Últimos 3 meses": disponiveis[:3], "Últimos 6 meses": disponiveis[:6],
+               "Ano mais recente": [m for m in disponiveis if m[:4] == disponiveis[0][:4]],
+               "Todos os meses": disponiveis}
+    for coluna, (rotulo, meses_atalho) in zip((c1, c2, c3, c4), atalhos.items()):
+        coluna.button(rotulo, key=f"ia_atalho_{rotulo}", width="stretch",
+                      on_click=lambda m=meses_atalho: st.session_state.update(ia_meses=m))
+    if not escolhidos:
+        st.info("Escolha pelo menos um mês.")
+        return
+    meses = sorted(escolhidos)
+    alvo = meses if len(meses) > 1 else meses[0]
+    periodo = rotulo_mes(meses[0]) if len(meses) == 1 else f"{len(meses)} meses ({rotulo_mes(meses[0])} a " \
+                                                            f"{rotulo_mes(meses[-1])})"
+    contexto = ia.montar_contexto(df, alvo, carregar_emergencias())
+    mil_tokens, custo = ia.estimar_custo(contexto)
+    st.caption(f"Período: **{periodo}** · cerca de {mil_tokens} mil tokens enviados · custo estimado "
+               f"≈ US$ {custo:.2f}".replace(".", ","))
+    modo = st.radio("O que você quer?", ["Análise completa", "Fazer uma pergunta"], horizontal=True)
     pedido = ""
     if modo == "Fazer uma pergunta":
         pedido = st.text_area("Sua pergunta", placeholder="Ex.: Quais SAS mais pioraram em recibos sem "
                               "atendimento social? O que pode explicar o estoque alto na SAS Sé?")
-    pode = modo == "Análise completa do mês" or pedido.strip()
-    chave_resultado = f"ia::{mes}::{pedido.strip()}"
+    pode = modo == "Análise completa" or pedido.strip()
+    chave_resultado = f"ia::{','.join(meses)}::{pedido.strip()}"
     if st.button("✨ Gerar análise", type="primary", disabled=not pode):
         try:
             with st.container(border=True):
-                texto = st.write_stream(ia.analisar(df, mes, pedido, chave, carregar_emergencias()))
+                texto = st.write_stream(ia.analisar(df, list(meses), pedido, chave, carregar_emergencias()))
             st.session_state[chave_resultado] = texto
         except anthropic.AuthenticationError:
             st.error("A chave da API não foi aceita. Confira o valor de ANTHROPIC_API_KEY nos Secrets.")
@@ -669,11 +690,11 @@ def pagina_ia():
             st.markdown(st.session_state[chave_resultado])
     if chave_resultado in st.session_state:
         st.download_button("⬇️ Baixar análise (.md)", st.session_state[chave_resultado].encode("utf-8"),
-                           file_name=f"analise_ia_{mes}.md", mime="text/markdown")
+                           file_name=f"analise_ia_{meses[0]}_a_{meses[-1]}.md", mime="text/markdown")
     with st.expander("Quais dados são enviados ao Claude?"):
         st.caption("Somente números agregados por mês, SAS e unidade (nenhum dado pessoal). "
                    "Cada análise custa poucos centavos de dólar na sua conta da API.")
-        st.code(ia.montar_contexto(df, mes, carregar_emergencias())[:4000] + "\n…", language=None)
+        st.code(contexto[:4000] + "\n…", language=None)
 
 
 def pagina_dados():

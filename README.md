@@ -123,9 +123,10 @@ Aparecem no Painel do mês, na Evolução mensal, no PDF, no Excel e na análise
   social** (em laranja, até 10%) e das que **concederam menos de 10% da cota**; e conferência automática de SAS e unidades: concessão acima da cota, mais recibos que
   cestas, recibos sem registro de atendimento social, demanda maior que a cota, concessões sem cota na
   unidade, SAS diferente da soma das unidades, unidade sem dados, baixo uso da cota e variação forte.
-- **🤖 Análise por IA** — o Claude (modelo `claude-opus-5-5`, da Anthropic) lê os números do mês
-  (Total Geral, SAS, unidades e alertas) e escreve uma análise técnica com recomendações, ou responde a
-  uma pergunta sua. Só números agregados são enviados (nenhum dado pessoal); cada análise custa poucos
+- **🤖 Análise por IA** — o Claude (modelo `claude-opus-5-5`, da Anthropic) lê os números dos **meses que você
+  escolher** (um mês, comparado com o anterior, ou vários meses, seguidos ou não, com atalhos para os
+  últimos 3/6 meses, o ano ou todo o histórico) e escreve uma análise técnica com tendências e
+  recomendações, ou responde a uma pergunta sua. A tela mostra o custo estimado antes de gerar. Só números agregados são enviados (nenhum dado pessoal); cada análise custa poucos
   centavos de dólar na sua conta da API. Para ativar, crie uma chave em https://console.anthropic.com →
   **API Keys** e acrescente nos Secrets: `ANTHROPIC_API_KEY = "sk-ant-..."`.
 - **🗂️ Histórico e relatório** — **relatório mensal em PDF para impressão**, tabela completa,
