@@ -5,61 +5,27 @@ Execute com:  streamlit run app.py
 
 from __future__ import annotations
 
-import hmac
-import os
 from datetime import date
 
 import pandas as pd
 import streamlit as st
 
 from dibes.config import CAMPOS, MESES_PT, SEM_SAS, TIPOS, TIPOS_UNIDADE, rotulo_mes
+from dibes.ui import exigir_senha, fmt, segredo, usar_banco_dos_secrets
 
 st.set_page_config(page_title="Cestas Básicas · SAS", page_icon="🧺", layout="wide")
 
 
-def segredo(nome: str) -> str | None:
-    """Lê um valor de .streamlit/secrets.toml (ou dos Secrets do Streamlit Cloud)."""
-    try:
-        return st.secrets.get(nome)
-    except Exception:  # nenhum arquivo de secrets configurado
-        return None
-
-
-# Na nuvem, o endereço do banco (Supabase/Neon) vem dos Secrets
-if segredo("DIBES_DATABASE_URL"):
-    os.environ.setdefault("DIBES_DATABASE_URL", segredo("DIBES_DATABASE_URL"))
+usar_banco_dos_secrets()
 
 import anthropic  # noqa: E402
 
 from dibes import analise, banco, graficos, ia, importador, relatorio, relatorio_pdf  # noqa: E402
 
-
-def exigir_senha():
-    """Se houver SENHA nos Secrets, pede a senha antes de mostrar o painel."""
-    senha = segredo("SENHA")
-    if not senha or st.session_state.get("autenticado"):
-        return
-    st.title("🧺 Cestas Básicas")
-    digitada = st.text_input("Senha de acesso", type="password")
-    if digitada:
-        if hmac.compare_digest(digitada, str(senha)):
-            st.session_state["autenticado"] = True
-            st.rerun()
-        st.error("Senha incorreta.")
-    st.stop()
-
-
-exigir_senha()
+exigir_senha("🧺 Cestas Básicas")
 
 
 # ------------------------------------------------------------------ apoio
-
-def fmt(v, casas: int = 0, sufixo: str = "") -> str:
-    if v is None or pd.isna(v):
-        return "—"
-    texto = f"{v:,.{casas}f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    return texto + sufixo
-
 
 def fmt_delta(atual, anterior, pct: bool = False) -> str | None:
     if anterior is None or pd.isna(anterior) or pd.isna(atual):

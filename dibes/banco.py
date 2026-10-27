@@ -41,6 +41,16 @@ emergencias = Table(
     Column("importado_em", String(19)),
 )
 
+# Monitoramento Anual DIBES: um valor por mês, atividade e indicador (lançado mês a mês)
+atividades = Table(
+    "atividades", metadados,
+    Column("mes", String(7), primary_key=True),
+    Column("atividade", String(100), primary_key=True),
+    Column("indicador", String(200), primary_key=True),
+    Column("valor", Float),
+    Column("atualizado_em", String(19)),
+)
+
 
 def url_padrao() -> str:
     url = os.environ.get("DIBES_DATABASE_URL")
@@ -148,3 +158,27 @@ def carregar_emergencias(url: str | None = None) -> pd.DataFrame:
 def excluir_unidade(mes: str, unidade: str, url: str | None = None) -> int:
     with conectar(url).begin() as con:
         return con.execute(delete(registros).where(registros.c.mes == mes, registros.c.unidade == unidade)).rowcount
+
+
+def salvar_atividades(mes: str, df: pd.DataFrame, url: str | None = None) -> int:
+    """Grava os lançamentos do mês (colunas atividade, indicador, valor), substituindo os que existiam."""
+    agora = datetime.now().isoformat(timespec="seconds")
+    linhas = {}
+    for r in df.itertuples(index=False):
+        indicador = str(r.indicador).strip()
+        if indicador and pd.notna(r.valor):
+            chave = (str(r.atividade), indicador.upper())
+            anterior = linhas.get(chave, {}).get("valor", 0)
+            linhas[chave] = {"mes": mes, "atividade": str(r.atividade), "indicador": indicador,
+                             "valor": float(r.valor) + anterior, "atualizado_em": agora}
+    with conectar(url).begin() as con:
+        con.execute(delete(atividades).where(atividades.c.mes == mes))
+        if linhas:
+            con.execute(atividades.insert(), list(linhas.values()))
+    return len(linhas)
+
+
+def carregar_atividades(url: str | None = None) -> pd.DataFrame:
+    consulta = select(atividades).order_by(atividades.c.mes, atividades.c.atividade, atividades.c.indicador)
+    with conectar(url).connect() as con:
+        return pd.read_sql(consulta, con)

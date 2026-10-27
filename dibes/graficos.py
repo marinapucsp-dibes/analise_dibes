@@ -197,3 +197,25 @@ def emergencias_mensal(por_mes: pd.DataFrame, titulo: str = "") -> go.Figure:
         hovertemplate="%{x}<br>Cestas: %{y:,.0f}<br>Ocorrências: %{customdata}<extra></extra>",
     ))
     return _layout(fig, titulo, altura=340, eixo_y="Cestas")
+
+
+def barras_por_mes(series: dict[str, pd.Series], titulo: str = "", eixo_y: str = "", reais: bool = False,
+                   empilhar: bool = False) -> go.Figure:
+    """Barras de janeiro a dezembro, uma série por indicador (séries indexadas por 1..12)."""
+    from .config import MESES_ABREV
+
+    meses = [m.capitalize() for m in MESES_ABREV]
+    fig = go.Figure()
+    for i, (nome, serie) in enumerate(series.items()):
+        valores = [serie.get(m) for m in range(1, 13)]
+        fig.add_trace(go.Bar(
+            x=meses, y=valores, name=nome, marker=dict(color=SERIES[i % len(SERIES)], cornerradius=3),
+            hovertemplate=f"%{{x}} · {nome}: {'R$ %{y:,.2f}' if reais else '%{y:,.0f}'}<extra></extra>",
+        ))
+    fig.update_layout(barmode="stack" if empilhar else "group", hovermode="x unified" if len(series) > 1 else None)
+    fig = _layout(fig, titulo, altura=360, eixo_y=eixo_y)
+    if reais:
+        fig.update_yaxes(tickprefix="R$ ")
+    if len(series) == 1:
+        fig.update_layout(showlegend=False)
+    return fig

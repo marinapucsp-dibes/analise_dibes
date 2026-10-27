@@ -160,10 +160,35 @@ Botão **🖨️ Relatório do mês (PDF)** no Painel do mês e em Histórico e 
 A pasta `exemplos/` tem dados **fictícios** de jan–set/2026 em todos os formatos
 (Excel com uma aba por mês, CSV, HTML e PDF). Para gerá-los de novo: `python scripts/gerar_exemplos.py`.
 
+## 📅 Monitoramento Anual DIBES (segundo app)
+
+App separado (`monitoramento_anual.py`), no mesmo repositório e no **mesmo banco**, para lançar mês a mês
+as atividades da DIBES e acompanhar o ano (Jan a Dez + Total):
+
+| Atividade | Indicadores |
+|---|---|
+| Benefício Eventual Alimentação | Cestas concedidas pelas SAS/unidades e em emergências (**automático**, do sistema de Cestas Básicas; digitável para meses que não estão lá), cestas compradas, valor gasto |
+| Benefício Eventual Passagens | Solicitações, solicitações atendidas, pessoas beneficiadas, passagens compradas, passagens não utilizadas, valor gasto |
+| SIGRC | Protocolos respondidos |
+| SEI | Processos SEI respondidos |
+| Programa Bolsa Família (PBF) | Manutenções em lote e manuais |
+| Outros | Nome livre da atividade e n.º de ações |
+
+Indicadores calculados: total de cestas concedidas, custo médio por cesta comprada, taxa de atendimento
+das passagens, % de passagens não utilizadas, custo médio por passagem e por pessoa, total de manutenções.
+
+Páginas: **📊 Painel anual** (cartões, gráficos por atividade, quadro anual, cestas por SAS e por unidade),
+**✍️ Lançar mês** (formulário; para corrigir, escolha o mês de novo) e **🖨️ Relatórios** (PDF e Excel).
+
+**Publicar:** no Streamlit Cloud, **Create app** com o mesmo repositório e branch, *Main file path*
+`monitoramento_anual.py`, e em **Advanced settings → Secrets** os mesmos `DIBES_DATABASE_URL` e `SENHA`
+do app de Cestas Básicas.
+
 ## Estrutura
 
 ```
-app.py                 # interface (Streamlit)
+app.py                 # painel de Cestas Básicas (Streamlit)
+monitoramento_anual.py # painel do Monitoramento Anual DIBES (Streamlit)
 dibes/config.py        # campos e nomes de coluna reconhecidos
 dibes/importador.py    # leitura de Excel, CSV, PDF e HTML
 dibes/banco.py         # histórico mensal (SQLite local ou Postgres/Supabase)
@@ -172,6 +197,9 @@ dibes/graficos.py      # gráficos (Plotly)
 dibes/relatorio.py     # relatório em Excel
 dibes/relatorio_pdf.py # relatório mensal em PDF (impressão)
 dibes/ia.py            # análise por IA (Claude)
+dibes/anual.py         # atividades do Monitoramento Anual e consolidação do ano
+dibes/relatorio_anual.py # PDF e Excel do Monitoramento Anual
+dibes/ui.py            # senha, Secrets e formatação comuns aos dois apps
 tests/                 # testes automáticos (pytest)
 ```
 
