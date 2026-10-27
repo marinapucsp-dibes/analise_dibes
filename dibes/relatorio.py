@@ -23,7 +23,7 @@ def _formatar(df: pd.DataFrame) -> pd.DataFrame:
     return d.rename(columns=ROTULOS)
 
 
-def gerar_excel(df: pd.DataFrame) -> bytes:
+def gerar_excel(df: pd.DataFrame, emergencias: pd.DataFrame | None = None) -> bytes:
     meses = sorted(df["mes"].unique())
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as xl:
@@ -33,6 +33,10 @@ def gerar_excel(df: pd.DataFrame) -> bytes:
         _formatar(analise.por_tipo(df)).to_excel(xl, sheet_name="CRAS x CREAS", index=False)
         colunas = ["mes", "sas", "tipo", "unidade", *CAMPOS, *analise.INDICADORES]
         _formatar(analise.por_unidade(df)[colunas]).to_excel(xl, sheet_name="Por unidade", index=False)
+        if emergencias is not None and not emergencias.empty:
+            e = emergencias.assign(mes=emergencias["mes"].map(rotulo_mes))[["mes", "ocorrencia", "cestas"]]
+            e.columns = ["Mês", "Localidade / Ocorrência", "Qtd. de Cestas"]
+            e.to_excel(xl, sheet_name="Emergências", index=False)
         alertas = [analise.alertas(df, m).assign(**{"Mês": rotulo_mes(m)}) for m in meses]
         if alertas:
             todos = pd.concat(alertas, ignore_index=True)

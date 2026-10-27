@@ -186,3 +186,14 @@ def recibos_x_atendimento(tabela: pd.DataFrame, limite: float = 10.0, titulo: st
     fig = _layout(fig, titulo, altura=max(340, 30 * len(d) + 140))
     fig.update_layout(margin=dict(r=190))
     return fig
+
+
+def emergencias_mensal(por_mes: pd.DataFrame, titulo: str = "") -> go.Figure:
+    """Cestas concedidas em emergências, por mês (colunas mes, cestas, ocorrencias)."""
+    fig = go.Figure(go.Bar(
+        x=_eixo_meses(por_mes["mes"]), y=por_mes["cestas"], marker=dict(color=SERIES[7], cornerradius=4), width=0.5,
+        text=por_mes["cestas"].map(lambda v: f"{v:,.0f}".replace(",", ".")), textposition="outside",
+        cliponaxis=False, textfont=dict(color=TINTA_MUDA), customdata=por_mes["ocorrencias"],
+        hovertemplate="%{x}<br>Cestas: %{y:,.0f}<br>Ocorrências: %{customdata}<extra></extra>",
+    ))
+    return _layout(fig, titulo, altura=340, eixo_y="Cestas")

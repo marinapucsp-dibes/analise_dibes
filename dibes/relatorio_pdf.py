@@ -153,7 +153,8 @@ def grafico_tipos(tipos: pd.DataFrame) -> Image:
 
 # -------------------------------------------------------------------- relatório
 
-def gerar_pdf(df: pd.DataFrame, mes: str, meses_historico: int = 12) -> bytes:
+def gerar_pdf(df: pd.DataFrame, mes: str, emergencias: pd.DataFrame | None = None,
+              meses_historico: int = 12) -> bytes:
     """Relatório do mês escolhido, com comparação ao mês anterior e evolução recente."""
     df = df[df["mes"] <= mes]
     meses = sorted(df["mes"].unique())
@@ -256,6 +257,30 @@ def gerar_pdf(df: pd.DataFrame, mes: str, meses_historico: int = 12) -> bytes:
         linhas = [cab] + [linha_de([rotulo_mes(r["mes"])], r) for _, r in t_rec.iterrows()]
         corpo.append(KeepTogether([Spacer(1, 6), Paragraph("Total Geral mês a mês", TEXTO),
                                    tabela(linhas, [3 * cm] + [2.7 * cm] * 6 + [2.4 * cm, 2 * cm])]))
+
+    # Emergências
+    if emergencias is not None and not emergencias.empty:
+        e_mes = emergencias[emergencias["mes"] == mes].sort_values("cestas", ascending=False)
+        recentes_e = analise.emergencias_por_mes(emergencias[emergencias["mes"].isin(meses[-meses_historico:])])
+        if not e_mes.empty or not recentes_e.empty:
+            bloco = [Paragraph(f"{next(secao)}. Emergências — {rotulo_mes(mes)}", SECAO),
+                     Paragraph("Concessões em situações de emergência (enchentes, incêndios, desabamentos…), "
+                               "realizadas pelo CPAS. Não entram nos totais das SAS.",
+                               ParagraphStyle("e", parent=TEXTO, spaceAfter=6))]
+            if e_mes.empty:
+                bloco.append(Paragraph("Nenhuma emergência registrada no mês.", TEXTO))
+            else:
+                linhas = [["Localidade / Ocorrência", "Qtd. de Cestas"]]
+                linhas += [[Paragraph(r.ocorrencia, CELULA), num(r.cestas)] for r in e_mes.itertuples()]
+                linhas.append(["Total", num(e_mes["cestas"].sum())])
+                bloco.append(tabela(linhas, [12 * cm, 3.5 * cm], (len(linhas) - 1,)))
+            if len(recentes_e) > 1:
+                linhas = [["Mês", "Cestas", "Ocorrências"]]
+                linhas += [[rotulo_mes(r.mes), num(r.cestas), num(r.ocorrencias)] for r in recentes_e.itertuples()]
+                bloco += [Spacer(1, 8), Paragraph("Emergências mês a mês", TEXTO),
+                          tabela(linhas, [3.5 * cm, 3 * cm, 3 * cm])]
+            corpo.append(PageBreak())
+            corpo.extend(bloco)
 
     # Alertas
     alertas = analise.alertas(df, mes)

@@ -288,3 +288,11 @@ def unificar_nomes(df: pd.DataFrame, mapa: dict[str, str] | None = None) -> pd.D
     if not mapa:
         return df
     return df.assign(unidade=df["unidade"].replace(mapa), sas=df["sas"].replace(mapa))
+
+
+def emergencias_por_mes(emerg: pd.DataFrame) -> pd.DataFrame:
+    """Total de cestas e de ocorrências de emergência por mês."""
+    if emerg.empty:
+        return pd.DataFrame(columns=["mes", "cestas", "ocorrencias"])
+    return (emerg.groupby("mes", as_index=False)
+            .agg(cestas=("cestas", "sum"), ocorrencias=("ocorrencia", "count")).sort_values("mes"))

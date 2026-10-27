@@ -19,6 +19,11 @@ from .config import (APELIDOS, APELIDOS_MES, APELIDOS_SAS, APELIDOS_UNIDADE, CAM
                      MESES_ABREV, PALAVRAS_TOTAL)
 
 COLUNAS = ["mes", "sas", "unidade", "tipo", *CAMPOS]
+COLUNAS_EMERGENCIA = ["mes", "ocorrencia", "cestas"]
+
+
+def _sem_emergencias() -> pd.DataFrame:
+    return pd.DataFrame(columns=COLUNAS_EMERGENCIA)
 
 
 @dataclass
@@ -27,6 +32,8 @@ class ResultadoImportacao:
     avisos: list[str] = field(default_factory=list)
     # Totais que vieram escritos no próprio arquivo (linha "Total"), por mês
     totais_informados: dict[str, dict[str, float]] = field(default_factory=dict)
+    # Concessões em emergências (localidade/ocorrência e quantidade de cestas), por mês
+    emergencias: pd.DataFrame = field(default_factory=_sem_emergencias)
 
 
 # ---------------------------------------------------------------- utilidades
@@ -234,7 +241,36 @@ def _juntar(resultados: list[ResultadoImportacao]) -> ResultadoImportacao:
     totais: dict = {}
     for r in resultados:
         totais.update(r.totais_informados)
-    return ResultadoImportacao(dados, avisos, totais)
+    emerg = [r.emergencias for r in resultados if not r.emergencias.empty]
+    emerg = pd.concat(emerg, ignore_index=True) if emerg else _sem_emergencias()
+    return ResultadoImportacao(dados, avisos, totais, emerg)
+
+
+def ler_emergencias(grade: list[list], mes_padrao: str | None) -> pd.DataFrame:
+    """Tabela de emergências: colunas 'Localidade / Ocorrência' e 'Qtd. de Cestas' (e, opcional, 'Mês')."""
+    grade = _limpar_grade(grade)
+    for i, linha in enumerate(grade[:40]):
+        textos = [normalizar(c) for c in linha]
+        col_oc = next((j for j, t in enumerate(textos)
+                       if any(p in t for p in ("ocorrencia", "localidade", "emergencia"))), None)
+        col_qt = next((j for j, t in enumerate(textos) if j != col_oc
+                       and any(p in t for p in ("qtd", "quantidade", "cestas"))), None)
+        if col_oc is None or col_qt is None:
+            continue
+        col_mes = next((j for j, t in enumerate(textos) if j not in (col_oc, col_qt)
+                        and any(t.startswith(a) for a in APELIDOS_MES)), None)
+        linhas = []
+        for l in grade[i + 1:]:
+            ocorrencia = re.sub(r"\s+", " ", str(l[col_oc])).strip()
+            cestas = para_numero(l[col_qt])
+            if not ocorrencia or cestas is None or eh_linha_total(ocorrencia):
+                continue
+            mes = (detectar_mes(str(l[col_mes])) if col_mes is not None and str(l[col_mes]).strip() else None)
+            if mes is None and col_mes is not None and hasattr(l[col_mes], "strftime"):
+                mes = l[col_mes].strftime("%Y-%m")
+            linhas.append({"mes": mes or mes_padrao, "ocorrencia": ocorrencia, "cestas": cestas})
+        return pd.DataFrame(linhas, columns=COLUNAS_EMERGENCIA)
+    return _sem_emergencias()
 
 
 # --------------------------------------------------------- leitores por formato
@@ -246,8 +282,9 @@ def ler_excel(conteudo: bytes, nome: str, mes_padrao: str | None) -> ResultadoIm
         grade = df.values.tolist()
         mes = detectar_mes(aba) or _mes_no_topo(grade) or mes_padrao
         r = interpretar_grade(grade, mes, origem=f"{nome} [aba {aba}]")
-        if r.dados.empty and len(planilhas) > 1:
-            r.avisos = []  # abas sem tabela (gráficos, notas) são ignoradas em silêncio
+        r.emergencias = ler_emergencias(grade, mes)
+        if r.dados.empty and (len(planilhas) > 1 or not r.emergencias.empty):
+            r.avisos = []  # abas sem tabela (gráficos, notas) ou só de emergências: sem aviso
         resultados.append(r)
     return _juntar(resultados)
 
@@ -264,7 +301,12 @@ def ler_csv(conteudo: bytes, nome: str, mes_padrao: str | None) -> ResultadoImpo
     df = pd.read_csv(io.StringIO(texto), sep=sep, header=None, dtype=str, keep_default_na=False,
                      engine="python", on_bad_lines="skip")
     grade = df.values.tolist()
-    return interpretar_grade(grade, _mes_no_topo(grade) or mes_padrao, origem=nome)
+    mes = _mes_no_topo(grade) or mes_padrao
+    r = interpretar_grade(grade, mes, origem=nome)
+    r.emergencias = ler_emergencias(grade, mes)
+    if r.dados.empty and not r.emergencias.empty:
+        r.avisos = []
+    return r
 
 
 def grade_do_html(codigo: str) -> list[list[list[str]]]:
@@ -286,6 +328,28 @@ def grade_do_html(codigo: str) -> list[list[list[str]]]:
 
 
 def ler_html(codigo: str, nome: str, mes_padrao: str | None) -> ResultadoImportacao:
+    r = _ler_html_principal(codigo, nome, mes_padrao)
+    emerg = [ler_emergencias(g, None) for g in grade_do_html(codigo)]
+    emerg = [e for e in emerg if not e.empty]
+    if emerg:
+        mes = r.dados["mes"].dropna().iloc[0] if not r.dados.empty and r.dados["mes"].notna().any() else None
+        r.emergencias = pd.concat(emerg, ignore_index=True)
+        r.emergencias["mes"] = r.emergencias["mes"].fillna(mes or _mes_da_pagina(codigo) or mes_padrao)
+        if r.dados.empty:
+            r.avisos = []
+    return r
+
+
+def _mes_da_pagina(codigo: str) -> str | None:
+    from bs4 import BeautifulSoup
+
+    sopa = BeautifulSoup(codigo, "html.parser")
+    for marca in sopa(["style", "script"]):
+        marca.decompose()
+    return detectar_mes(sopa.get_text("\n")[:3000])
+
+
+def _ler_html_principal(codigo: str, nome: str, mes_padrao: str | None) -> ResultadoImportacao:
     from bs4 import BeautifulSoup
 
     sopa = BeautifulSoup(codigo, "html.parser")

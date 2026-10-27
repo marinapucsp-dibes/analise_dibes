@@ -31,6 +31,16 @@ registros = Table(
     Column("importado_em", String(19)),
 )
 
+# Concessões em situações de emergência (enchentes, incêndios...), feitas pelo CPAS, fora das cotas das SAS
+emergencias = Table(
+    "emergencias", metadados,
+    Column("mes", String(7), primary_key=True),
+    Column("ocorrencia", String(300), primary_key=True),
+    Column("cestas", Float),
+    Column("arquivo", String(500)),
+    Column("importado_em", String(19)),
+)
+
 
 def url_padrao() -> str:
     url = os.environ.get("DIBES_DATABASE_URL")
@@ -99,8 +109,40 @@ def mapa_sas(url: str | None = None) -> dict[str, str]:
 
 
 def excluir_mes(mes: str, url: str | None = None) -> int:
+    """Apaga o mês inteiro (unidades e emergências). Retorna quantos registros de unidades saíram."""
     with conectar(url).begin() as con:
+        con.execute(delete(emergencias).where(emergencias.c.mes == mes))
         return con.execute(delete(registros).where(registros.c.mes == mes)).rowcount
+
+
+def salvar_emergencias(df: pd.DataFrame, arquivo: str = "", url: str | None = None,
+                       meses: tuple[str, ...] = ()) -> int:
+    """Grava as emergências. A lista de cada mês é sempre completa: substitui a que existia nesse mês.
+    `meses` permite esvaziar um mês (ex.: todas as linhas apagadas na correção)."""
+    agora = datetime.now().isoformat(timespec="seconds")
+    linhas = [{"mes": r.mes, "ocorrencia": str(r.ocorrencia).strip(), "arquivo": arquivo, "importado_em": agora,
+               "cestas": None if pd.isna(r.cestas) else float(r.cestas)}
+              for r in df.itertuples(index=False) if str(r.ocorrencia).strip()]
+    # ocorrência repetida no mês: soma as cestas
+    unicas: dict = {}
+    for l in linhas:
+        chave = (l["mes"], l["ocorrencia"].upper())
+        if chave in unicas:
+            unicas[chave]["cestas"] = (unicas[chave]["cestas"] or 0) + (l["cestas"] or 0)
+        else:
+            unicas[chave] = l
+    with conectar(url).begin() as con:
+        for mes in set(meses) | {l["mes"] for l in unicas.values()}:
+            con.execute(delete(emergencias).where(emergencias.c.mes == mes))
+        if unicas:
+            con.execute(emergencias.insert(), list(unicas.values()))
+    return len(unicas)
+
+
+def carregar_emergencias(url: str | None = None) -> pd.DataFrame:
+    consulta = select(emergencias).order_by(emergencias.c.mes, emergencias.c.ocorrencia)
+    with conectar(url).connect() as con:
+        return pd.read_sql(consulta, con)
 
 
 def excluir_unidade(mes: str, unidade: str, url: str | None = None) -> int:

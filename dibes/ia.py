@@ -31,6 +31,8 @@ Significado dos campos:
 - Recibos sem atendimento = Recibos − Atendimento Social: indica emissão de recibo fora do fluxo \
 (sem registro de atendimento social). Acima de 10% dos recibos é ponto crítico.
 - Concessão abaixo de 10% da cota também é ponto crítico.
+- Emergências: cestas concedidas pelo CPAS em situações de emergência (enchentes, incêndios, desabamentos), \
+por localidade/ocorrência; não entram nos totais das SAS.
 
 Como responder:
 - Escreva em português do Brasil, em Markdown, para gestores e técnicos (sem jargão estatístico).
@@ -44,8 +46,9 @@ ROTEIRO_PADRAO = """Faça a análise técnica do mês com estas seções:
 3. **Estoque e uso da cota** — onde sobram cestas, onde há uso de estoque anterior e unidades que \
 concederam menos de 10% da cota.
 4. **Demanda × atendimento** — onde a demanda não está sendo atendida.
-5. **Destaques positivos.**
-6. **Recomendações** — ações práticas e priorizadas para a gestão."""
+5. **Emergências** — se houver, volume e ocorrências principais (em uma ou duas frases).
+6. **Destaques positivos.**
+7. **Recomendações** — ações práticas e priorizadas para a gestão."""
 
 
 def _csv(df: pd.DataFrame, colunas: list[str]) -> str:
@@ -60,7 +63,7 @@ def _csv(df: pd.DataFrame, colunas: list[str]) -> str:
     return d.rename(columns=nomes).to_csv(index=False, sep=";")
 
 
-def montar_contexto(df: pd.DataFrame, mes: str) -> str:
+def montar_contexto(df: pd.DataFrame, mes: str, emergencias: pd.DataFrame | None = None) -> str:
     """Resumo dos dados do mês (e do anterior) em texto, para enviar ao modelo."""
     meses = sorted(df["mes"].unique())
     anterior = analise.mes_anterior(meses, mes)
@@ -83,6 +86,13 @@ def montar_contexto(df: pd.DataFrame, mes: str) -> str:
                                             ["mes", "sas", *campos, *ind]))
     und = analise.por_unidade(do_mes).sort_values(["sas", "unidade"])
     partes.append(f"## Unidades em {rotulo_mes(mes)}\n" + _csv(und, ["sas", "unidade", "tipo", *campos, *ind]))
+    if emergencias is not None and not emergencias.empty:
+        e = emergencias[emergencias["mes"].isin([m for m in (mes, anterior) if m])]
+        if not e.empty:
+            partes.append("## Emergências (CPAS)\n" + e.assign(mes=e["mes"].map(rotulo_mes))
+                          .rename(columns={"mes": "Mês", "ocorrencia": "Localidade/Ocorrência",
+                                           "cestas": "Cestas"})[["Mês", "Localidade/Ocorrência", "Cestas"]]
+                          .to_csv(index=False, sep=";"))
     alertas = analise.alertas(df, mes)
     alertas = alertas[alertas["Gravidade"] != "Informativo"]
     if not alertas.empty:
@@ -90,10 +100,11 @@ def montar_contexto(df: pd.DataFrame, mes: str) -> str:
     return "\n\n".join(partes)
 
 
-def analisar(df: pd.DataFrame, mes: str, pedido: str, api_key: str) -> Iterator[str]:
+def analisar(df: pd.DataFrame, mes: str, pedido: str, api_key: str,
+             emergencias: pd.DataFrame | None = None) -> Iterator[str]:
     """Envia os dados ao Claude e devolve o texto da análise aos poucos (streaming)."""
     client = anthropic.Anthropic(api_key=api_key)
-    conteudo = f"<dados>\n{montar_contexto(df, mes)}\n</dados>\n\n{pedido.strip() or ROTEIRO_PADRAO}"
+    conteudo = f"<dados>\n{montar_contexto(df, mes, emergencias)}\n</dados>\n\n{pedido.strip() or ROTEIRO_PADRAO}"
     with client.beta.messages.stream(
         model=MODELO,
         max_tokens=16000,

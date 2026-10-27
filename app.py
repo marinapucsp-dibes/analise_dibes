@@ -71,6 +71,11 @@ def fmt_delta(atual, anterior, pct: bool = False) -> str | None:
     return f"{'+' if atual - anterior > 0 else ''}{base}" + (f" ({fmt(v, 1, '%')})" if v is not None else "")
 
 
+@st.cache_data(show_spinner=False, ttl=60)
+def carregar_emergencias() -> pd.DataFrame:
+    return banco.carregar_emergencias()
+
+
 @st.cache_data(show_spinner=False, ttl=60)  # ttl: vê em até 1 min o que outra pessoa importou
 def carregar_dados() -> pd.DataFrame:
     # grafias diferentes do mesmo nome em meses diferentes ('JAÇANÃ' x 'JAÇÃNA') viram uma só
@@ -83,6 +88,7 @@ def dados() -> pd.DataFrame:
 
 def recarregar():
     carregar_dados.clear()
+    carregar_emergencias.clear()
     pdf_do_mes.clear()
 
 
@@ -153,7 +159,7 @@ def nivel_comparacao(df: pd.DataFrame, chave: str) -> pd.DataFrame:
 
 @st.cache_data(show_spinner="Gerando relatório…", ttl=60)
 def pdf_do_mes(mes: str) -> bytes:
-    return relatorio_pdf.gerar_pdf(carregar_dados(), mes)
+    return relatorio_pdf.gerar_pdf(carregar_dados(), mes, carregar_emergencias())
 
 
 def botao_pdf(mes: str, chave: str):
@@ -200,7 +206,8 @@ def pagina_importar():
         mes_escolhido = seletor_mes("Mês de referência (quando o arquivo não informar)", "imp", padrao)
         forcar = st.checkbox("Usar este mês para todas as linhas, mesmo que o arquivo indique outro")
 
-    aba_arq, aba_html, aba_manual = st.tabs(["Arquivo", "Colar código HTML", "Digitar manualmente"])
+    aba_arq, aba_html, aba_manual, aba_emerg = st.tabs(["Arquivo", "Colar código HTML", "Digitar manualmente",
+                                                        "🚨 Emergências"])
     resultado = None
     with aba_arq:
         arquivos = st.file_uploader("Arquivos", type=["xlsx", "xls", "xlsm", "ods", "csv", "txt", "pdf", "html", "htm"],
@@ -229,12 +236,12 @@ def pagina_importar():
             base = unidades.assign(mes=mes_escolhido, **{c: None for c in CAMPOS})[importador.COLUNAS]
             resultado = importador.ResultadoImportacao(base.reset_index(drop=True))
             st.session_state["origem"] = "digitação manual"
+    with aba_emerg:
+        lancar_emergencias(mes_escolhido)
 
     if resultado is not None:
-        if forcar:
-            resultado.dados["mes"] = mes_escolhido
-        else:
-            resultado.dados["mes"] = resultado.dados["mes"].fillna(mes_escolhido)
+        for tabela in (resultado.dados, resultado.emergencias):
+            tabela["mes"] = mes_escolhido if forcar else tabela["mes"].fillna(mes_escolhido)
         # unidades sem SAS no arquivo recebem a SAS que tinham nas importações anteriores
         sem = resultado.dados["sas"].isna() & (resultado.dados["tipo"] != "SAS")
         if sem.any() and not df_hist.empty:
@@ -252,56 +259,113 @@ def pagina_importar():
                                         + "; ".join(f"{k} → {v}" for k, v in mapa.items()) + ".")
         st.session_state["previa"] = resultado
 
+    if "salvo" in st.session_state:
+        st.success(st.session_state.pop("salvo"), icon="✅")
     previa: importador.ResultadoImportacao | None = st.session_state.get("previa")
     if previa is None:
         return
     st.subheader("Prévia")
     for aviso in previa.avisos:
         st.warning(aviso, icon="⚠️")
-    if previa.dados.empty:
+    tem_dados, tem_emerg = not previa.dados.empty, not previa.emergencias.empty
+    if not tem_dados and not tem_emerg:
         st.error("Nenhum dado reconhecido. Verifique se a tabela tem os nomes das colunas "
                  "(Cota/Cotas, Quantidade Solicitada/Cestas Recebidas, Demanda, Atendimento Social/Atend. "
                  "Técnico, Recibos Emitidos/Válidos, Cestas Concedidas/Entregues) e uma coluna com os nomes "
                  "das unidades.")
         return
 
-    editado = st.data_editor(
-        previa.dados, num_rows="dynamic", width="stretch", hide_index=True, key=f"editor_{id(previa)}",
-        column_config={
-            "mes": st.column_config.TextColumn("Mês (AAAA-MM)", validate=r"^20\d{2}-(0[1-9]|1[0-2])$", required=True),
-            "sas": st.column_config.TextColumn("SAS", help="Supervisão a que a unidade pertence"),
-            "unidade": st.column_config.TextColumn("Unidade", required=True),
-            "tipo": st.column_config.SelectboxColumn("Tipo", options=TIPOS, required=True),
-            **{c: st.column_config.NumberColumn(r, min_value=0, step=1) for c, r in CAMPOS.items()},
-        },
-    )
-    editado = editado.dropna(subset=["unidade"])
-    editado = editado[editado["unidade"].astype(str).str.strip() != ""]
-    meses = sorted(editado["mes"].dropna().unique())
-    resumo = editado.groupby("tipo")["unidade"].count().to_dict()
-    st.caption(f"{len(editado)} linhas · " + " · ".join(f"{k}: {v}" for k, v in resumo.items())
-               + f" · mês(es): {', '.join(rotulo_mes(m) for m in meses)}")
-
-    existentes = set(df_hist["mes"]) & set(meses) if not df_hist.empty else set()
+    editado = previa.dados
     substituir = False
-    if existentes:
-        rotulos = ", ".join(rotulo_mes(m) for m in sorted(existentes))
-        st.info(f"Já existem dados salvos de {rotulos}. Reimportar **substitui** os valores (não soma).",
-                icon="ℹ️")
-        substituir = st.checkbox(f"Substituir {rotulos} por inteiro (apaga o que já está salvo desse mês antes de "
-                                 "gravar; use para corrigir uma importação errada)", value=True,
-                                 help="Desmarque só se este arquivo complementa o que já foi importado no mês "
-                                      "(por exemplo, o PDF por CRAS enviado depois do PDF por SAS).")
+    if tem_dados:
+        editado = st.data_editor(
+            previa.dados, num_rows="dynamic", width="stretch", hide_index=True, key=f"editor_{id(previa)}",
+            column_config={
+                "mes": st.column_config.TextColumn("Mês (AAAA-MM)", validate=r"^20\d{2}-(0[1-9]|1[0-2])$",
+                                                   required=True),
+                "sas": st.column_config.TextColumn("SAS", help="Supervisão a que a unidade pertence"),
+                "unidade": st.column_config.TextColumn("Unidade", required=True),
+                "tipo": st.column_config.SelectboxColumn("Tipo", options=TIPOS, required=True),
+                **{c: st.column_config.NumberColumn(r, min_value=0, step=1) for c, r in CAMPOS.items()},
+            },
+        )
+        editado = editado.dropna(subset=["unidade"])
+        editado = editado[editado["unidade"].astype(str).str.strip() != ""]
+        meses = sorted(editado["mes"].dropna().unique())
+        resumo = editado.groupby("tipo")["unidade"].count().to_dict()
+        st.caption(f"{len(editado)} linhas · " + " · ".join(f"{k}: {v}" for k, v in resumo.items())
+                   + f" · mês(es): {', '.join(rotulo_mes(m) for m in meses)}")
+
+        existentes = set(df_hist["mes"]) & set(meses) if not df_hist.empty else set()
+        if existentes:
+            rotulos = ", ".join(rotulo_mes(m) for m in sorted(existentes))
+            st.info(f"Já existem dados salvos de {rotulos}. Reimportar **substitui** os valores (não soma).",
+                    icon="ℹ️")
+            substituir = st.checkbox(f"Substituir {rotulos} por inteiro (apaga o que já está salvo desse mês antes "
+                                     "de gravar; use para corrigir uma importação errada)", value=True,
+                                     help="Desmarque só se este arquivo complementa o que já foi importado no mês "
+                                          "(por exemplo, o PDF por CRAS enviado depois do PDF por SAS).")
+
+    emergencias = previa.emergencias
+    if tem_emerg:
+        st.markdown("**🚨 Emergências encontradas no arquivo**")
+        emergencias = editor_emergencias(previa.emergencias, f"emerg_{id(previa)}")
+        meses_e = sorted(emergencias["mes"].dropna().unique())
+        st.caption(f"{len(emergencias)} ocorrências · {fmt(emergencias['cestas'].sum())} cestas · mês(es): "
+                   f"{', '.join(rotulo_mes(m) for m in meses_e)}. A lista de emergências de cada mês substitui "
+                   "a que já estava salva.")
+
+    faltando_mes = (tem_dados and editado["mes"].isna().any()) or (tem_emerg and emergencias["mes"].isna().any())
     c1, c2 = st.columns([1, 4])
-    if c1.button("💾 Salvar no histórico", type="primary", disabled=editado["mes"].isna().any()):
-        n = banco.salvar(editado, st.session_state.get("origem", ""), substituir_meses=substituir)
+    if c1.button("💾 Salvar no histórico", type="primary", disabled=faltando_mes):
+        origem = st.session_state.get("origem", "")
+        partes = []
+        if tem_dados:
+            partes.append(f"{banco.salvar(editado, origem, substituir_meses=substituir)} registros salvos")
+        if tem_emerg:
+            partes.append(f"{banco.salvar_emergencias(emergencias, origem)} emergências salvas")
         st.session_state.pop("previa", None)
+        st.session_state["salvo"] = " · ".join(partes) + "."
         recarregar()
-        st.success(f"{n} registros salvos.")
-        st.balloons()
+        st.rerun()
     if c2.button("Descartar"):
         st.session_state.pop("previa", None)
         st.rerun()
+
+
+def editor_emergencias(tabela: pd.DataFrame, chave: str) -> pd.DataFrame:
+    editada = st.data_editor(
+        tabela.reset_index(drop=True), num_rows="dynamic", width="stretch", hide_index=True, key=chave,
+        column_config={
+            "mes": st.column_config.TextColumn("Mês (AAAA-MM)", validate=r"^20\d{2}-(0[1-9]|1[0-2])$",
+                                               required=True),
+            "ocorrencia": st.column_config.TextColumn("Localidade / Ocorrência", required=True, width="large"),
+            "cestas": st.column_config.NumberColumn("Qtd. de Cestas", min_value=0, step=1, required=True),
+        })
+    editada = editada.dropna(subset=["ocorrencia"])
+    return editada[editada["ocorrencia"].astype(str).str.strip() != ""]
+
+
+def lancar_emergencias(mes: str):
+    """Lançar, completar ou corrigir as emergências de qualquer mês."""
+    st.write(f"Emergências de **{rotulo_mes(mes)}** (troque o mês no seletor acima). Concessões do Auxílio "
+             "Alimentação em situações de emergência (enchentes, incêndios, desabamentos…), realizadas pelo CPAS.")
+    st.caption("Inclua linhas no fim da tabela, altere ou apague (selecione e tecle Delete) e salve. "
+               "Para lançar vários meses de uma vez, importe na aba **Arquivo** uma planilha com as colunas "
+               "**Mês**, **Localidade / Ocorrência** e **Qtd. de Cestas**.")
+    todas = carregar_emergencias()
+    do_mes = todas[todas["mes"] == mes][["mes", "ocorrencia", "cestas"]]
+    if do_mes.empty:
+        do_mes = pd.DataFrame({"mes": [mes], "ocorrencia": [""], "cestas": [float("nan")]})
+    editada = editor_emergencias(do_mes, f"lanc_emerg_{mes}")
+    st.caption(f"Total: {fmt(editada['cestas'].sum())} cestas em {len(editada)} ocorrências.")
+    if st.button("💾 Salvar emergências", type="primary", key="salvar_emerg"):
+        if editada["mes"].isna().any() or editada["cestas"].isna().any():
+            st.error("Preencha o mês e a quantidade de cestas de todas as linhas.")
+            return
+        n = banco.salvar_emergencias(editada, "digitação manual", meses=(mes,))
+        recarregar()
+        st.success(f"{rotulo_mes(mes)}: {n} ocorrências salvas.")
 
 
 def pagina_painel():
@@ -376,6 +440,34 @@ def pagina_painel():
         st.dataframe(tabela_bonita(und[["sas", "tipo", "unidade", *CAMPOS, *analise.INDICADORES]]),
                      hide_index=True, width="stretch", column_config=CONFIG_NUMEROS)
 
+    painel_emergencias(mes)
+
+
+def painel_emergencias(mes: str):
+    emerg = carregar_emergencias()
+    if emerg.empty:
+        return
+    st.divider()
+    st.subheader(f"🚨 Emergências · {rotulo_mes(mes)}")
+    st.caption("Concessões em situações de emergência (enchentes, incêndios, desabamentos…), realizadas pelo "
+               "CPAS. Não entram nos totais das SAS.")
+    do_mes = emerg[emerg["mes"] == mes]
+    if do_mes.empty:
+        st.info("Nenhuma emergência registrada neste mês. Para lançar, use Importar dados → 🚨 Emergências.")
+        return
+    por_mes = analise.emergencias_por_mes(emerg)
+    ant = analise.mes_anterior(por_mes["mes"].tolist(), mes)
+    ant_linha = por_mes[por_mes["mes"] == ant].iloc[0] if ant else None
+    c1, c2 = st.columns(2)
+    c1.metric("Cestas em emergências", fmt(do_mes["cestas"].sum()),
+              fmt_delta(do_mes["cestas"].sum(), None if ant_linha is None else ant_linha["cestas"]),
+              delta_color="off", border=True)
+    c2.metric("Ocorrências", len(do_mes), border=True)
+    tabela = do_mes.sort_values("cestas", ascending=False)[["ocorrencia", "cestas"]]
+    tabela.columns = ["Localidade / Ocorrência", "Qtd. de Cestas"]
+    st.dataframe(tabela, hide_index=True, width="stretch",
+                 column_config={"Qtd. de Cestas": st.column_config.NumberColumn(format="%.0f")})
+
 
 def pagina_evolucao():
     df = dados()
@@ -419,6 +511,13 @@ def pagina_evolucao():
                                                    f"Por {'SAS' if (tabela['tipo'] == 'SAS').all() else 'unidade'}"
                                                    f" · {rotulo_mes(mes_rxa)}"),
                     width="stretch", theme=None)
+
+    emerg = carregar_emergencias()
+    emerg = emerg[emerg["mes"].isin(set(df["mes"]))]
+    if not emerg.empty:
+        st.subheader("🚨 Emergências mês a mês")
+        st.plotly_chart(graficos.emergencias_mensal(analise.emergencias_por_mes(emerg)), width="stretch",
+                        theme=None)
 
     with st.expander(f"Tabela mensal — {recorte}"):
         cols = ["mes", *CAMPOS, *analise.INDICADORES]
@@ -546,7 +645,7 @@ def pagina_ia():
     if st.button("✨ Gerar análise", type="primary", disabled=not pode):
         try:
             with st.container(border=True):
-                texto = st.write_stream(ia.analisar(df, mes, pedido, chave))
+                texto = st.write_stream(ia.analisar(df, mes, pedido, chave, carregar_emergencias()))
             st.session_state[chave_resultado] = texto
         except anthropic.AuthenticationError:
             st.error("A chave da API não foi aceita. Confira o valor de ANTHROPIC_API_KEY nos Secrets.")
@@ -574,7 +673,7 @@ def pagina_ia():
     with st.expander("Quais dados são enviados ao Claude?"):
         st.caption("Somente números agregados por mês, SAS e unidade (nenhum dado pessoal). "
                    "Cada análise custa poucos centavos de dólar na sua conta da API.")
-        st.code(ia.montar_contexto(df, mes)[:4000] + "\n…", language=None)
+        st.code(ia.montar_contexto(df, mes, carregar_emergencias())[:4000] + "\n…", language=None)
 
 
 def pagina_dados():
@@ -596,7 +695,7 @@ def pagina_dados():
             st.write("")
             botao_pdf(mes_pdf, "historico")
     c1, c2 = st.columns(2)
-    c1.download_button("⬇️ Relatório completo (Excel)", relatorio.gerar_excel(df),
+    c1.download_button("⬇️ Relatório completo (Excel)", relatorio.gerar_excel(df, carregar_emergencias()),
                        file_name=f"relatorio_cestas_{meses[0]}_a_{meses[-1]}.xlsx", type="primary",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     c2.download_button("⬇️ Dados brutos (CSV)", df.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"),

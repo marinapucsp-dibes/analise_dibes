@@ -98,6 +98,19 @@ O sistema localiza sozinho a linha de cabeçalho e reconhece variações de nome
 - Para ajustar poucos números, use **Histórico e relatório → ✏️ Corrigir dados salvos**: a tabela do mês
   pode ser editada direto (alterar, incluir ou apagar linhas).
 
+## Emergências
+
+Concessões do Auxílio Alimentação em situações de emergência (enchentes, incêndios, desabamentos…),
+realizadas pelo CPAS, por **localidade/ocorrência**. Ficam separadas dos totais das SAS.
+
+- **Junto com o painel HTML:** a tabela "Emergências" do painel mensal é lida automaticamente.
+- **Lançar ou corrigir qualquer mês:** *Importar dados → 🚨 Emergências* — escolha o mês no seletor do topo,
+  edite a tabela e salve (a lista do mês substitui a anterior).
+- **Vários meses de uma vez:** importe na aba *Arquivo* uma planilha (Excel/CSV) com as colunas **Mês**,
+  **Localidade / Ocorrência** e **Qtd. de Cestas**.
+
+Aparecem no Painel do mês, na Evolução mensal, no PDF, no Excel e na análise por IA.
+
 ## Páginas
 
 - **📊 Painel do mês** — os seis campos com variação em relação ao mês anterior e indicadores, para o
