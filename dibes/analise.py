@@ -83,7 +83,7 @@ def _por_sas_bruto(df: pd.DataFrame) -> pd.DataFrame:
                       informadas.set_index(["mes", "sas"]).index))
                   .reset_index())
     chave = set(zip(informadas["mes"], informadas["sas"]))
-    faltantes = somadas[[(m, s) not in chave for m, s in zip(somadas["mes"], somadas["sas"])]]
+    faltantes = somadas.loc[[(m, s) not in chave for m, s in zip(somadas["mes"], somadas["sas"])]]
     return pd.concat([informadas, faltantes], ignore_index=True).sort_values(["mes", "sas"])
 
 

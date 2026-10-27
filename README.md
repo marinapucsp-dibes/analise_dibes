@@ -178,7 +178,16 @@ Indicadores calculados: total de cestas concedidas, custo médio por cesta compr
 das passagens, % de passagens não utilizadas, custo médio por passagem e por pessoa, total de manutenções.
 
 Páginas: **📊 Painel anual** (cartões, gráficos por atividade, quadro anual, cestas por SAS e por unidade),
-**✍️ Lançar mês** (formulário; para corrigir, escolha o mês de novo) e **🖨️ Relatórios** (PDF e Excel).
+**✍️ Lançar mês** (formulário; para corrigir, escolha o mês de novo), **📥 Importar** e **🖨️ Relatórios**
+(PDF e Excel).
+
+**Importar (Excel, CSV ou PDF):** reconhece o quadro anual (indicadores nas linhas, meses nas colunas — formato
+do **modelo de planilha** que se baixa na própria página e do Excel/PDF gerados pelo sistema), o formulário de
+um mês (indicador e valor), a lista *Mês / Indicador / Valor* e meses nas linhas. Os nomes dos indicadores são
+reconhecidos com variações ("N.º de cestas compradas", "Valor gasto" na seção de passagens…); linhas calculadas
+são ignoradas e o que não for reconhecido entra como "Outros" para conferir na prévia (editável). Por padrão a
+importação **completa** os meses (atualiza os indicadores do arquivo e mantém os demais); há a opção de
+substituir os meses por inteiro.
 
 **Publicar:** no Streamlit Cloud, **Create app** com o mesmo repositório e branch, *Main file path*
 `monitoramento_anual.py`, e em **Advanced settings → Secrets** os mesmos `DIBES_DATABASE_URL` e `SENHA`
@@ -199,6 +208,7 @@ dibes/relatorio_pdf.py # relatório mensal em PDF (impressão)
 dibes/ia.py            # análise por IA (Claude)
 dibes/anual.py         # atividades do Monitoramento Anual e consolidação do ano
 dibes/relatorio_anual.py # PDF e Excel do Monitoramento Anual
+dibes/importador_anual.py # importação de Excel/CSV/PDF no Monitoramento Anual
 dibes/ui.py            # senha, Secrets e formatação comuns aos dois apps
 tests/                 # testes automáticos (pytest)
 ```

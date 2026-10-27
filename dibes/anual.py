@@ -82,7 +82,7 @@ def lancamentos(atividades: pd.DataFrame, sistema: pd.DataFrame) -> pd.DataFrame
     digitado = atividades[["mes", "atividade", "indicador", "valor"]].copy()
     if not sistema.empty:
         chave_sis = set(zip(sistema["mes"], sistema["indicador"]))
-        digitado = digitado[[(m, i) not in chave_sis for m, i in zip(digitado["mes"], digitado["indicador"])]]
+        digitado = digitado.loc[[(m, i) not in chave_sis for m, i in zip(digitado["mes"], digitado["indicador"])]]
         digitado = pd.concat([digitado, sistema[["mes", "atividade", "indicador", "valor"]]], ignore_index=True)
     return digitado
 

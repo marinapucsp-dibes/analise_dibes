@@ -16,7 +16,7 @@ from dibes.ui import exigir_senha, fmt, fmt_reais, fmt_reais_curto, usar_banco_d
 st.set_page_config(page_title="Monitoramento Anual DIBES", page_icon="📅", layout="wide")
 usar_banco_dos_secrets()
 
-from dibes import analise, anual, banco, graficos, relatorio_anual  # noqa: E402
+from dibes import analise, anual, banco, graficos, importador_anual, relatorio_anual  # noqa: E402
 
 exigir_senha("📅 Monitoramento Anual DIBES")
 
@@ -174,14 +174,14 @@ def pagina_painel():
         st.caption("↳ = indicador calculado a partir dos valores lançados.")
 
 
-def seletor_mes() -> str:
+def seletor_mes(chave: str = "lanc") -> str:
     hoje = date.today()
     padrao_ano, padrao_mes = (hoje.year, hoje.month - 1) if hoje.month > 1 else (hoje.year - 1, 12)
     c1, c2 = st.columns([2, 1])
     mes = c1.selectbox("Mês", range(1, 13), index=padrao_mes - 1, format_func=lambda m: MESES_PT[m - 1],
-                       key="lanc_m")
+                       key=f"{chave}_m")
     anos = list(range(hoje.year - 5, hoje.year + 1))
-    ano = c2.selectbox("Ano", anos, index=anos.index(padrao_ano), key="lanc_a")
+    ano = c2.selectbox("Ano", anos, index=anos.index(padrao_ano), key=f"{chave}_a")
     return f"{ano}-{mes:02d}"
 
 
@@ -243,6 +243,111 @@ def pagina_lancar():
         st.rerun()
 
 
+def pagina_importar():
+    st.header("📥 Importar Excel, CSV ou PDF")
+    if "salvo_imp" in st.session_state:
+        st.success(st.session_state.pop("salvo_imp"), icon="✅")
+    st.markdown("""
+Formatos aceitos:
+- **Quadro anual** — indicadores nas linhas e meses nas colunas (Jan a Dez). É o formato do **modelo** abaixo
+  e também do Excel e do PDF que este sistema gera.
+- **Formulário de um mês** — nome do indicador e valor (o mês vem do arquivo ou do seletor abaixo).
+- **Lista** — colunas *Mês*, *Indicador* e *Valor*.
+- **Meses nas linhas** — uma linha por mês e uma coluna por indicador.
+""")
+    c1, c2 = st.columns([1, 2])
+    ano_modelo = c1.selectbox("Ano do modelo", [str(a) for a in range(date.today().year + 1, date.today().year - 4,
+                                                                         -1)], index=1, key="ano_modelo")
+    c2.write("")
+    c2.download_button("⬇️ Baixar modelo de planilha", importador_anual.modelo_excel(ano_modelo),
+                       file_name=f"modelo_monitoramento_anual_{ano_modelo}.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    with st.container(border=True):
+        st.caption("Mês de referência para arquivos que não informam o mês (ex.: formulário de um mês). "
+                   "O ano também é usado quando as colunas trazem só o nome do mês.")
+        mes_padrao = seletor_mes("imp")
+    arquivos = st.file_uploader("Arquivos", type=["xlsx", "xls", "xlsm", "ods", "csv", "txt", "pdf"],
+                                accept_multiple_files=True)
+    if arquivos and st.button("Ler arquivos", type="primary"):
+        partes = []
+        for arq in arquivos:
+            try:
+                partes.append(importador_anual.importar_arquivo(arq.getvalue(), arq.name, mes_padrao[:4],
+                                                                mes_padrao))
+            except Exception as erro:  # arquivo corrompido, formato inesperado...
+                partes.append(importador_anual.ResultadoAnual(pd.DataFrame(columns=importador_anual.COLUNAS),
+                                                              [f"{arq.name}: não foi possível ler ({erro})."]))
+        previa = importador_anual.juntar(partes)
+        # cestas concedidas (SAS/emergências) de meses que já estão no sistema de Cestas Básicas não são gravadas
+        registros, emergencias = carregar_cestas()
+        sistema = anual.cestas_do_sistema(registros, emergencias)
+        no_sistema = set(zip(sistema["mes"], sistema["indicador"]))
+        ja_tem = [(m, i) in no_sistema for m, i in zip(previa.dados["mes"], previa.dados["indicador"])]
+        if any(ja_tem):
+            previa.dados = previa.dados.loc[[not x for x in ja_tem]].reset_index(drop=True)
+            previa.avisos.append(f"{sum(ja_tem)} valores de cestas concedidas foram ignorados: esses meses já "
+                                 "vêm do sistema de Cestas Básicas.")
+        st.session_state["previa_anual"] = previa
+
+    previa = st.session_state.get("previa_anual")
+    if previa is None:
+        return
+    st.subheader("Prévia")
+    for aviso in previa.avisos:
+        st.warning(aviso, icon="⚠️")
+    if previa.dados.empty:
+        st.error("Nenhum valor reconhecido. Use o modelo de planilha ou confira se o arquivo tem os nomes dos "
+                 "indicadores e os meses.")
+        return
+    tabela = previa.dados.assign(indicador=previa.dados["indicador"].map(lambda i: anual.ROTULO.get(i, i)))
+    tabela = tabela.sort_values(["mes", "atividade"]).reset_index(drop=True)
+    editado = st.data_editor(
+        tabela, num_rows="dynamic", width="stretch", hide_index=True, key=f"prev_anual_{id(previa)}",
+        column_config={
+            "mes": st.column_config.TextColumn("Mês (AAAA-MM)", validate=r"^20\d{2}-(0[1-9]|1[0-2])$",
+                                               required=True),
+            "atividade": st.column_config.SelectboxColumn("Atividade", options=[*anual.CATALOGO, anual.OUTROS],
+                                                          required=True),
+            "indicador": st.column_config.TextColumn("Indicador", required=True, width="large"),
+            "valor": st.column_config.NumberColumn("Valor", min_value=0),
+        })
+    editado = editado.dropna(subset=["mes", "indicador", "valor"])
+    meses = sorted(editado["mes"].unique())
+    st.caption(f"{len(editado)} valores · meses: {', '.join(rotulo_mes(m) for m in meses)}")
+
+    # rótulo exibido -> chave do indicador (nas atividades fixas)
+    chave_do_rotulo = {(atv, rot): ind for atv, itens in anual.CATALOGO.items() for ind, rot, _ in itens}
+    invalidos = [f"{r.atividade}: {r.indicador}" for r in editado.itertuples()
+                 if r.atividade != anual.OUTROS and (r.atividade, r.indicador) not in chave_do_rotulo]
+    if invalidos:
+        st.error("Estes indicadores não existem na atividade escolhida (troque a atividade para 'Outros' ou "
+                 "corrija o nome): " + "; ".join(invalidos))
+
+    substituir = st.checkbox("Substituir os meses por inteiro (apaga o que já estava lançado nesses meses)",
+                             value=False, help="Desmarcado: os valores do arquivo completam ou atualizam o que já "
+                                               "foi lançado, sem apagar os demais indicadores do mês.")
+    c1, c2 = st.columns([1, 4])
+    if c1.button("💾 Salvar", type="primary", disabled=bool(invalidos)):
+        atividades = carregar_atividades()
+        for mes in meses:
+            novos = editado[editado["mes"] == mes].assign(indicador=lambda d: [
+                chave_do_rotulo.get((a, i), i) for a, i in zip(d["atividade"], d["indicador"])])
+            if not substituir:
+                antigos = atividades[atividades["mes"] == mes]
+                chaves = set(zip(novos["atividade"], novos["indicador"].str.upper()))
+                antigos = antigos.loc[[(a, i.upper()) not in chaves for a, i in zip(antigos["atividade"],
+                                                                                 antigos["indicador"])]]
+                novos = pd.concat([antigos[["atividade", "indicador", "valor"]], novos], ignore_index=True)
+            banco.salvar_atividades(mes, novos[["atividade", "indicador", "valor"]])
+        recarregar()
+        st.session_state.pop("previa_anual", None)
+        st.session_state["salvo_imp"] = f"{len(editado)} valores salvos em {len(meses)} mês(es)."
+        st.rerun()
+    if c2.button("Descartar"):
+        st.session_state.pop("previa_anual", None)
+        st.rerun()
+
+
 def pagina_relatorios():
     st.header("🖨️ Relatórios")
     ano = st.selectbox("Ano", anos_disponiveis(), key="rel_ano")
@@ -265,7 +370,8 @@ def pagina_relatorios():
 
 # ---------------------------------------------------------------- navegação
 
-PAGINAS = {"📊 Painel anual": pagina_painel, "✍️ Lançar mês": pagina_lancar, "🖨️ Relatórios": pagina_relatorios}
+PAGINAS = {"📊 Painel anual": pagina_painel, "✍️ Lançar mês": pagina_lancar, "📥 Importar": pagina_importar,
+           "🖨️ Relatórios": pagina_relatorios}
 
 with st.sidebar:
     st.title("📅 Monitoramento Anual DIBES")
