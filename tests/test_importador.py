@@ -245,3 +245,85 @@ def test_pdf_impresso_do_navegador(tmp_path):
     total = analise.total_geral(r.dados).iloc[0]
     assert total["cestas_concedidas"] == 111  # vem da soma das unidades
     assert total["estoque"] == 140 - 111
+
+
+def test_grafias_diferentes_entre_meses_viram_um_nome():
+    linhas = [
+        ("2026-01", "SAS JAÇANÃ/TREMEMBÉ - JT", "SAS", "SAS JAÇANÃ/TREMEMBÉ - JT"),
+        ("2026-01", "CREAS SÃO MIGUEL PAULISTA", "CREAS", "SAS SÃO MIGUEL - MP"),
+        ("2026-01", "CRAS CIDADE ADEMAR", "CRAS", "SAS CIDADE ADEMAR - CD"),
+        ("2026-01", "CRAS CIDADE ADEMAR II", "CRAS", "SAS CIDADE ADEMAR - CD"),
+        ("2026-02", "SAS JAÇÃNA/TREMEMBÉ - JT", "SAS", "SAS JAÇÃNA/TREMEMBÉ - JT"),
+        ("2026-02", "CREAS SÃO MIGUEL", "CREAS", "SAS SÃO MIGUEL - MP"),
+        ("2026-02", "CRAS CIDADE ADEMAR", "CRAS", "SAS CIDADE ADEMAR - CD"),
+        ("2026-02", "CRAS CIDADE ADEMAR II", "CRAS", "SAS CIDADE ADEMAR - CD"),
+        ("2026-03", "SAS SANTO AMARO - AS", "SAS", "SAS SANTO AMARO - AS"),
+        ("2026-04", "SAS SANTO AMARO - SA", "SAS", "SAS SANTO AMARO - SA"),
+    ]
+    df = pd.DataFrame(linhas, columns=["mes", "unidade", "tipo", "sas"])
+    mapa = analise.mapa_nomes(df)
+    assert mapa == {"SAS JAÇÃNA/TREMEMBÉ - JT": "SAS JAÇANÃ/TREMEMBÉ - JT",
+                    "CREAS SÃO MIGUEL": "CREAS SÃO MIGUEL PAULISTA",
+                    "SAS SANTO AMARO - SA": "SAS SANTO AMARO - AS"}
+    u = analise.unificar_nomes(df)
+    assert u.loc[4, "sas"] == "SAS JAÇANÃ/TREMEMBÉ - JT"
+    assert u["unidade"].nunique() == 5  # CIDADE ADEMAR e CIDADE ADEMAR II continuam separadas
+
+
+def _unidades(**campos):
+    base = {"mes": "2026-05", "sas": "SAS X", "tipo": "CRAS", "cota_disponivel": 100,
+            "quantidade_solicitada": 100, "demanda_registrada": 50, "atendimento_social": 50,
+            "recibos_emitidos": 50, "cestas_concedidas": 50}
+    return pd.DataFrame([{**base, "unidade": nome, **valores} for nome, valores in campos.items()])
+
+
+def test_destaques_recibos_e_baixa_concessao():
+    df = _unidades(**{"CRAS A": {"recibos_emitidos": 60, "cestas_concedidas": 60},   # 16,7% sem atendimento
+                      "CRAS B": {"recibos_emitidos": 52, "cestas_concedidas": 52},   # 3,8%
+                      "CRAS C": {"cestas_concedidas": 5, "recibos_emitidos": 5, "atendimento_social": 5},
+                      "CRAS D": {}})
+    rec = analise.destaque_recibos(df, "2026-05").set_index("unidade")
+    assert list(rec.index) == ["CRAS A", "CRAS B"]
+    assert round(rec.loc["CRAS A", "pct_recibos_sem_atendimento"], 1) == 16.7
+    assert list(analise.destaque_baixa_concessao(df, "2026-05")["unidade"]) == ["CRAS C"]
+    alertas = analise.alertas(df, "2026-05").set_index(["Unidade", "Regra"])["Gravidade"]
+    assert alertas[("CRAS A", "Recibos sem registro de atendimento social")] == "Crítico"
+    assert alertas[("CRAS B", "Recibos sem registro de atendimento social")] == "Atenção"
+    assert alertas[("CRAS C", "Concessão abaixo de 10% da cota")] == "Crítico"
+    assert ("CRAS C", "Baixo uso da cota") not in alertas.index
+
+
+def test_analise_por_ia_monta_o_pedido(monkeypatch):
+    from dibes import ia
+
+    enviado = {}
+
+    class StreamFalso:
+        text_stream = iter(["Análise ", "pronta."])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *erro):
+            return False
+
+        def get_final_message(self):
+            return type("Msg", (), {"stop_reason": "end_turn"})()
+
+    class ClienteFalso:
+        def __init__(self, api_key):
+            enviado["api_key"] = api_key
+            self.beta = type("Beta", (), {"messages": self})()
+
+        def stream(self, **kwargs):
+            enviado.update(kwargs)
+            return StreamFalso()
+
+    monkeypatch.setattr(ia.anthropic, "Anthropic", ClienteFalso)
+    d = importador.importar_html_colado(PAINEL_JS).dados
+    texto = "".join(ia.analisar(d, "2026-03", "", "sk-ant-teste"))
+    assert texto == "Análise pronta."
+    assert enviado["model"] == "claude-opus-5-5"
+    assert enviado["fallbacks"] == "default" and enviado["betas"] == ["server-side-fallback-2026-07-01"]
+    pedido = enviado["messages"][0]["content"]
+    assert "SAS NORTE - NO" in pedido and "CRAS NORTE II" in pedido and "Recomendações" in pedido

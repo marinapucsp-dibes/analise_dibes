@@ -29,7 +29,9 @@ def segredo(nome: str) -> str | None:
 if segredo("DIBES_DATABASE_URL"):
     os.environ.setdefault("DIBES_DATABASE_URL", segredo("DIBES_DATABASE_URL"))
 
-from dibes import analise, banco, graficos, importador, relatorio, relatorio_pdf  # noqa: E402
+import anthropic  # noqa: E402
+
+from dibes import analise, banco, graficos, ia, importador, relatorio, relatorio_pdf  # noqa: E402
 
 
 def exigir_senha():
@@ -71,7 +73,8 @@ def fmt_delta(atual, anterior, pct: bool = False) -> str | None:
 
 @st.cache_data(show_spinner=False, ttl=60)  # ttl: vê em até 1 min o que outra pessoa importou
 def carregar_dados() -> pd.DataFrame:
-    return banco.carregar()
+    # grafias diferentes do mesmo nome em meses diferentes ('JAÇANÃ' x 'JAÇÃNA') viram uma só
+    return analise.unificar_nomes(banco.carregar())
 
 
 def dados() -> pd.DataFrame:
@@ -237,6 +240,16 @@ def pagina_importar():
         if sem.any() and not df_hist.empty:
             mapa = banco.mapa_sas()
             resultado.dados.loc[sem, "sas"] = resultado.dados.loc[sem, "unidade"].str.upper().map(mapa)
+        # nomes escritos de outro jeito que no histórico passam a usar a grafia do histórico
+        if not df_hist.empty and not resultado.dados.empty:
+            novos = resultado.dados
+            outros_meses = df_hist[~df_hist["mes"].isin(set(novos["mes"]))]
+            mapa = analise.mapa_nomes(pd.concat([outros_meses, novos], ignore_index=True))
+            mapa = {k: v for k, v in mapa.items() if k in set(novos["unidade"]) | set(novos["sas"].dropna())}
+            if mapa:
+                resultado.dados = analise.unificar_nomes(novos, mapa)
+                resultado.avisos.append("Nomes ajustados para a grafia já usada no histórico: "
+                                        + "; ".join(f"{k} → {v}" for k, v in mapa.items()) + ".")
         st.session_state["previa"] = resultado
 
     previa: importador.ResultadoImportacao | None = st.session_state.get("previa")
@@ -388,10 +401,18 @@ def pagina_evolucao():
     campo = st.selectbox("Campo", list(CAMPOS), index=5, format_func=CAMPOS.get, key="evo_tipo")
     st.plotly_chart(graficos.tipo_mensal(tipos, campo), width="stretch", theme=None)
 
-    st.subheader("Mapa de calor mês a mês")
-    tabela = nivel_comparacao(df, "evo_mapa")
-    campo_mapa = st.selectbox("Campo", list(CAMPOS), index=5, format_func=CAMPOS.get, key="evo_mapa")
-    st.plotly_chart(graficos.mapa_calor(tabela, campo_mapa), width="stretch", theme=None)
+    st.subheader("Recibos emitidos × Atendimento social")
+    st.caption("Recibos acima dos atendimentos indicam emissão sem registro de atendimento social. "
+               f"Em vermelho: mais de {analise.LIMITE_RECIBOS_SEM_ATENDIMENTO:.0f}% dos recibos sem atendimento.")
+    st.plotly_chart(graficos.evolucao_campos(serie, ["atendimento_social", "recibos_emitidos"],
+                                             f"{recorte} · mês a mês"), width="stretch", theme=None)
+    meses_periodo = sorted(df["mes"].unique(), reverse=True)
+    mes_rxa = st.selectbox("Mês do comparativo", meses_periodo, format_func=rotulo_mes, key="evo_rxa_mes")
+    tabela = nivel_comparacao(df[df["mes"] == mes_rxa], "evo_rxa")
+    st.plotly_chart(graficos.recibos_x_atendimento(tabela, analise.LIMITE_RECIBOS_SEM_ATENDIMENTO,
+                                                   f"Por {'SAS' if (tabela['tipo'] == 'SAS').all() else 'unidade'}"
+                                                   f" · {rotulo_mes(mes_rxa)}"),
+                    width="stretch", theme=None)
 
     with st.expander(f"Tabela mensal — {recorte}"):
         cols = ["mes", *CAMPOS, *analise.INDICADORES]
@@ -408,6 +429,9 @@ def pagina_alertas():
     with c1:
         mes = escolher_mes_existente(df, "alerta_mes")
     limite = c2.slider("Destacar variação de concessões acima de (%)", 10, 100, 30, step=5)
+    destaques(df, mes)
+
+    st.subheader("Todos os alertas do mês")
     tabela = analise.alertas(df, mes, limite)
     icones = {"Crítico": "🔴 Crítico", "Atenção": "🟠 Atenção", "Informativo": "🔵 Informativo"}
     cont = tabela["Gravidade"].value_counts()
@@ -426,7 +450,9 @@ As regras valem para cada SAS e cada unidade.
 
 - 🔴 **Concessão acima da cota** — cestas concedidas maiores que a cota (quando há cota registrada).
 - 🔴 **Mais recibos do que cestas** — cada recibo corresponde a pelo menos uma cesta.
-- 🟠 **Recibos sem registro de atendimento social** — mais recibos que atendimentos técnicos registrados.
+- 🔴 / 🟠 **Recibos sem registro de atendimento social** — mais recibos que atendimentos técnicos
+  registrados; vermelho quando mais de 10% dos recibos não têm atendimento.
+- 🔴 **Concessão abaixo de 10% da cota** — cestas concedidas abaixo de 10% da cota disponível.
 - 🟠 **Demanda maior que a cota** — indica necessidade de ampliar a cota.
 - 🟠 **Sem dados no mês** — informou no mês anterior e não neste.
 - 🔵 **Concessões sem cota na unidade** — a cota pode estar registrada só na SAS.
@@ -434,10 +460,115 @@ As regras valem para cada SAS e cada unidade.
 - 🟠 **Cestas em estoque** — quantidade solicitada maior que a concedida: sobraram cestas no mês
   (risco de vencimento e de armazenamento inadequado).
 - 🔵 **Uso de estoque do mês anterior** — foram concedidas mais cestas do que as solicitadas no mês.
-- 🔵 **Baixo uso da cota** — menos de 50% da cota utilizada.
+- 🔵 **Baixo uso da cota** — entre 10% e 50% da cota utilizada.
 - 🔵 **Variação forte nas concessões** — mudança acima do limite escolhido em relação ao mês anterior.
 """)
 
+
+
+VERMELHO = "background-color: #fbe0e0; color: #8a1c1c"
+LARANJA = "background-color: #fdeedb; color: #7a4a00"
+
+
+def destaques(df: pd.DataFrame, mes: str):
+    """Destaques das unidades (CRAS/CREAS/Centro POP) que pedem ação imediata."""
+    limite = analise.LIMITE_RECIBOS_SEM_ATENDIMENTO
+    recibos = analise.destaque_recibos(df, mes)
+    st.subheader("🧾 Recibos emitidos acima do atendimento social")
+    st.caption(f"Unidades que emitiram mais recibos do que registraram atendimentos sociais. "
+               f"🔴 Vermelho: mais de {limite:.0f}% dos recibos sem atendimento social · 🟠 até {limite:.0f}%.")
+    if recibos.empty:
+        st.success("Nenhuma unidade emitiu mais recibos do que atendimentos neste mês. ✅")
+    else:
+        acima = recibos["pct_recibos_sem_atendimento"] > limite
+        c1, c2 = st.columns(2)
+        c1.metric(f"🔴 Acima de {limite:.0f}%", int(acima.sum()), border=True)
+        c2.metric(f"🟠 Até {limite:.0f}%", int((~acima).sum()), border=True)
+        t = recibos.assign(situacao=acima.map({True: "🔴", False: "🟠"}))[
+            ["situacao", "sas", "unidade", "tipo", "recibos_emitidos", "atendimento_social",
+             "recibos_sem_atendimento", "pct_recibos_sem_atendimento"]]
+        t.columns = ["", "SAS", "Unidade", "Tipo", "Recibos Emitidos", "Atendimento Social",
+                     "Recibos sem atendimento", "% sem atendimento"]
+        estilo = t.style.apply(lambda linha: [VERMELHO if linha["% sem atendimento"] > limite else LARANJA]
+                               * len(linha), axis=1).format(
+            {"% sem atendimento": "{:.1f}%", "Recibos Emitidos": "{:.0f}", "Atendimento Social": "{:.0f}",
+             "Recibos sem atendimento": "{:.0f}"})
+        st.dataframe(estilo, hide_index=True, width="stretch")
+
+    baixa = analise.destaque_baixa_concessao(df, mes)
+    st.subheader(f"📉 Unidades que concederam menos de {analise.LIMITE_CONCESSAO_MINIMA:.0f}% da cota")
+    if baixa.empty:
+        st.success("Todas as unidades com cota concederam ao menos 10% dela. ✅")
+    else:
+        t = baixa[["sas", "unidade", "tipo", "cota_disponivel", "cestas_concedidas", "uso_cota"]]
+        t.columns = ["SAS", "Unidade", "Tipo", "Cota Disponível", "Cestas Concedidas", "% da cota concedida"]
+        estilo = t.style.apply(lambda linha: [VERMELHO] * len(linha), axis=1).format(
+            {"% da cota concedida": "{:.1f}%", "Cota Disponível": "{:.0f}", "Cestas Concedidas": "{:.0f}"})
+        st.dataframe(estilo, hide_index=True, width="stretch")
+    st.divider()
+
+
+def pagina_ia():
+    df = dados()
+    if df.empty:
+        sem_dados()
+    st.header("🤖 Análise por IA")
+    st.caption("O Claude lê os números do mês (Total Geral, SAS, unidades e alertas) e escreve uma análise "
+               "técnica com recomendações. Confira sempre os números citados antes de usar em documentos oficiais.")
+    chave = segredo("ANTHROPIC_API_KEY")
+    if not chave:
+        st.warning("Falta configurar a chave da API do Claude.", icon="🔑")
+        st.markdown("""
+1. Entre em **https://console.anthropic.com** → **API Keys** → **Create Key** e copie a chave (começa com `sk-ant-`).
+2. Em **Plans & Billing**, confira se há créditos disponíveis.
+3. No Streamlit Cloud: **Manage app → ⋮ → Settings → Secrets** e acrescente a linha:
+   `ANTHROPIC_API_KEY = "sk-ant-..."`
+4. Salve; o painel reinicia em cerca de 1 minuto.
+""")
+        return
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        mes = escolher_mes_existente(df, "ia_mes", "Mês a analisar")
+    with c2:
+        modo = st.radio("O que você quer?", ["Análise completa do mês", "Fazer uma pergunta"], horizontal=True)
+    pedido = ""
+    if modo == "Fazer uma pergunta":
+        pedido = st.text_area("Sua pergunta", placeholder="Ex.: Quais SAS mais pioraram em recibos sem "
+                              "atendimento social? O que pode explicar o estoque alto na SAS Sé?")
+    pode = modo == "Análise completa do mês" or pedido.strip()
+    chave_resultado = f"ia::{mes}::{pedido.strip()}"
+    if st.button("✨ Gerar análise", type="primary", disabled=not pode):
+        try:
+            with st.container(border=True):
+                texto = st.write_stream(ia.analisar(df, mes, pedido, chave))
+            st.session_state[chave_resultado] = texto
+        except anthropic.AuthenticationError:
+            st.error("A chave da API não foi aceita. Confira o valor de ANTHROPIC_API_KEY nos Secrets.")
+        except anthropic.PermissionDeniedError:
+            st.error("A chave não tem permissão para usar este modelo. Confira a conta no console da Anthropic.")
+        except anthropic.RateLimitError:
+            st.error("Limite de uso da API atingido. Aguarde alguns minutos e tente de novo.")
+        except anthropic.BadRequestError as erro:
+            mensagem = str(erro)
+            if "credit" in mensagem.lower():
+                st.error("A conta da API está sem créditos. Adicione créditos em console.anthropic.com → "
+                         "Plans & Billing.")
+            else:
+                st.error(f"A API recusou o pedido: {mensagem}")
+        except anthropic.APIConnectionError:
+            st.error("Não foi possível conectar à API do Claude. Tente novamente.")
+        except anthropic.APIStatusError as erro:
+            st.error(f"Erro na API do Claude ({erro.status_code}). Tente novamente em instantes.")
+    elif chave_resultado in st.session_state:
+        with st.container(border=True):
+            st.markdown(st.session_state[chave_resultado])
+    if chave_resultado in st.session_state:
+        st.download_button("⬇️ Baixar análise (.md)", st.session_state[chave_resultado].encode("utf-8"),
+                           file_name=f"analise_ia_{mes}.md", mime="text/markdown")
+    with st.expander("Quais dados são enviados ao Claude?"):
+        st.caption("Somente números agregados por mês, SAS e unidade (nenhum dado pessoal). "
+                   "Cada análise custa poucos centavos de dólar na sua conta da API.")
+        st.code(ia.montar_contexto(df, mes)[:4000] + "\n…", language=None)
 
 
 def pagina_dados():
@@ -474,7 +605,8 @@ def pagina_dados():
     with st.expander("🗑️ Excluir dados"):
         c1, c2, c3 = st.columns([2, 3, 1])
         mes = c1.selectbox("Mês", meses, format_func=rotulo_mes, key="del_mes")
-        unidades = ["(todas as unidades do mês)", *sorted(df[df["mes"] == mes]["unidade"])]
+        gravados = banco.carregar()  # nomes exatamente como estão no banco
+        unidades = ["(todas as unidades do mês)", *sorted(gravados[gravados["mes"] == mes]["unidade"])]
         unidade = c2.selectbox("Unidade", unidades, key="del_unid")
         c3.write("")
         if c3.button("Excluir", type="secondary"):
@@ -493,6 +625,7 @@ PAGINAS = {
     "📊 Painel do mês": pagina_painel,
     "📈 Evolução mensal": pagina_evolucao,
     "⚠️ Alertas": pagina_alertas,
+    "🤖 Análise por IA": pagina_ia,
     "📥 Importar dados": pagina_importar,
     "🗂️ Histórico e relatório": pagina_dados,
 }

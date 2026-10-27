@@ -88,6 +88,9 @@ O sistema localiza sozinho a linha de cabeçalho e reconhece variações de nome
   a **SAS** de cada unidade. Unidades sem SAS no arquivo recebem a SAS da importação anterior.
 - Linhas de **total** (“Total”, “Total Geral”) não são gravadas: o sistema recalcula o total e
   **avisa se a soma não bate** com o total informado no arquivo.
+- **Grafias diferentes** do mesmo nome entre meses (ex.: “JAÇANÃ” × “JAÇÃNA”, “SANTO AMARO - AS” × “- SA”,
+  “CREAS SÃO MIGUEL” × “CREAS SÃO MIGUEL PAULISTA”) são unificadas automaticamente, para não quebrar a
+  comparação mês a mês. Nomes que aparecem juntos num mesmo mês nunca são unidos.
 - Antes de salvar, a **prévia é editável**. Reimportar um mês substitui os dados das mesmas unidades.
 
 ## Páginas
@@ -96,10 +99,17 @@ O sistema localiza sozinho a linha de cabeçalho e reconhece variações de nome
   Total Geral, uma SAS, um tipo de unidade ou uma unidade; ranking e comparativo entre SAS ou entre
   unidades (com filtro por SAS); resumo por tipo e tabelas por SAS e por unidade.
 - **📈 Evolução mensal** — linhas mês a mês por recorte, indicadores (Total Geral × CRAS × CREAS),
-  participação de cada tipo de unidade e mapa de calor por SAS ou por unidade.
-- **⚠️ Alertas** — conferência automática de SAS e unidades: concessão acima da cota, mais recibos que
+  participação de cada tipo de unidade e comparativo **Recibos emitidos × Atendimento social** (mês a mês
+  e por SAS/unidade, em vermelho onde mais de 10% dos recibos não têm atendimento).
+- **⚠️ Alertas** — destaques em vermelho das unidades com **mais de 10% dos recibos sem atendimento
+  social** (em laranja, até 10%) e das que **concederam menos de 10% da cota**; e conferência automática de SAS e unidades: concessão acima da cota, mais recibos que
   cestas, recibos sem registro de atendimento social, demanda maior que a cota, concessões sem cota na
   unidade, SAS diferente da soma das unidades, unidade sem dados, baixo uso da cota e variação forte.
+- **🤖 Análise por IA** — o Claude (modelo `claude-opus-5-5`, da Anthropic) lê os números do mês
+  (Total Geral, SAS, unidades e alertas) e escreve uma análise técnica com recomendações, ou responde a
+  uma pergunta sua. Só números agregados são enviados (nenhum dado pessoal); cada análise custa poucos
+  centavos de dólar na sua conta da API. Para ativar, crie uma chave em https://console.anthropic.com →
+  **API Keys** e acrescente nos Secrets: `ANTHROPIC_API_KEY = "sk-ant-..."`.
 - **🗂️ Histórico e relatório** — **relatório mensal em PDF para impressão**, tabela completa,
   exclusão de meses/unidades e download do **relatório em Excel** (abas Total Geral, Por SAS,
   CRAS x CREAS, Por unidade e Alertas) e dos dados em CSV.
@@ -142,6 +152,7 @@ dibes/analise.py       # totais, indicadores e alertas
 dibes/graficos.py      # gráficos (Plotly)
 dibes/relatorio.py     # relatório em Excel
 dibes/relatorio_pdf.py # relatório mensal em PDF (impressão)
+dibes/ia.py            # análise por IA (Claude)
 tests/                 # testes automáticos (pytest)
 ```
 

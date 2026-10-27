@@ -153,3 +153,36 @@ def perfil_mes(linha: pd.Series, titulo: str = "") -> go.Figure:
         hovertemplate="%{x}: %{y:,.0f}<extra></extra>",
     ))
     return _layout(fig, titulo, altura=380)
+
+
+def recibos_x_atendimento(tabela: pd.DataFrame, limite: float = 10.0, titulo: str = "") -> go.Figure:
+    """Recibos emitidos × atendimentos sociais registrados, por SAS ou unidade.
+
+    Ordena pelo percentual de recibos sem atendimento; acima do limite, o rótulo fica em vermelho."""
+    d = tabela[(tabela["recibos_emitidos"].fillna(0) > 0) | (tabela["atendimento_social"].fillna(0) > 0)]
+    d = d.sort_values(["pct_recibos_sem_atendimento", "recibos_sem_atendimento"], ascending=True,
+                      na_position="first")
+    fig = go.Figure()
+    for campo in ["atendimento_social", "recibos_emitidos"]:
+        fig.add_trace(go.Bar(
+            y=d["unidade"], x=d[campo], name=CAMPOS[campo], orientation="h",
+            marker=dict(color=COR_CAMPO[campo], cornerradius=3),
+            hovertemplate=f"%{{y}}<br>{CAMPOS[campo]}: %{{x:,.0f}}<extra></extra>",
+        ))
+    for r in d.itertuples(index=False):
+        dif = (r.recibos_emitidos or 0) - (r.atendimento_social or 0)
+        if dif <= 0:
+            continue
+        pct = r.pct_recibos_sem_atendimento
+        acima = pct > limite
+        fig.add_annotation(
+            x=max(r.recibos_emitidos, r.atendimento_social), y=r.unidade, xanchor="left", showarrow=False,
+            xshift=6, text=f"{'⚠ ' if acima else ''}+{dif:,.0f} sem atendimento ({pct:.0f}%)".replace(",", "."),
+            font=dict(size=11, color="#d03b3b" if acima else TINTA_MUDA),
+        )
+    fig.update_yaxes(categoryorder="array", categoryarray=d["unidade"].tolist(), gridcolor="rgba(0,0,0,0)")
+    fig.update_xaxes(gridcolor=GRADE, showgrid=True)
+    fig.update_layout(barmode="group", bargap=0.3, bargroupgap=0.05)
+    fig = _layout(fig, titulo, altura=max(340, 30 * len(d) + 140))
+    fig.update_layout(margin=dict(r=190))
+    return fig

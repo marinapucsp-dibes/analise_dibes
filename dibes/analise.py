@@ -9,6 +9,8 @@ ainda não distribuídas às unidades); senão, somam as unidades.
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from types import SimpleNamespace
 
 import numpy as np
@@ -30,6 +32,10 @@ INDICADORES = {
 }
 PERCENTUAIS = {k for k, v in INDICADORES.items() if "%" in v}
 
+# Limites dos destaques em vermelho
+LIMITE_RECIBOS_SEM_ATENDIMENTO = 10.0  # % dos recibos emitidos sem atendimento social registrado
+LIMITE_CONCESSAO_MINIMA = 10.0  # % da cota concedida
+
 
 def _div(a, b):
     a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
@@ -48,6 +54,7 @@ def com_indicadores(df: pd.DataFrame) -> pd.DataFrame:
     d["estoque"] = d["quantidade_solicitada"] - d["cestas_concedidas"]
     d["demanda_reprimida"] = (d["demanda_registrada"] - d["cestas_concedidas"]).clip(lower=0)
     d["recibos_sem_atendimento"] = (d["recibos_emitidos"] - d["atendimento_social"]).clip(lower=0)
+    d["pct_recibos_sem_atendimento"] = _div(d["recibos_sem_atendimento"], d["recibos_emitidos"])
     d["cestas_sem_recibo"] = (d["cestas_concedidas"] - d["recibos_emitidos"]).clip(lower=0)
     return d
 
@@ -140,9 +147,11 @@ def alertas(df: pd.DataFrame, mes: str, limite_variacao: float = 30.0) -> pd.Dat
             add("Crítico", r, "Mais recibos do que cestas",
                 f"{r.recibos_emitidos:.0f} recibos para {r.cestas_concedidas:.0f} cestas (cada recibo tem ao menos 1 cesta).")
         if ok(r.recibos_emitidos, r.atendimento_social) and r.recibos_emitidos > r.atendimento_social:
-            add("Atenção", r, "Recibos sem registro de atendimento social",
+            pct = r.pct_recibos_sem_atendimento
+            add("Crítico" if pct > LIMITE_RECIBOS_SEM_ATENDIMENTO else "Atenção", r,
+                "Recibos sem registro de atendimento social",
                 f"{r.recibos_emitidos - r.atendimento_social:.0f} recibos a mais que os atendimentos registrados "
-                f"({r.recibos_emitidos:.0f} × {r.atendimento_social:.0f}).")
+                f"({r.recibos_emitidos:.0f} × {r.atendimento_social:.0f}): {pct:.1f}% dos recibos sem atendimento.")
         if ok(r.demanda_registrada, r.cota_disponivel) and r.cota_disponivel > 0 \
                 and r.demanda_registrada > r.cota_disponivel:
             add("Atenção", r, "Demanda maior que a cota",
@@ -152,7 +161,11 @@ def alertas(df: pd.DataFrame, mes: str, limite_variacao: float = 30.0) -> pd.Dat
                 and r.tipo != "SAS":
             add("Informativo", r, "Concessões sem cota na unidade",
                 f"{r.cestas_concedidas:.0f} cestas concedidas sem cota registrada para a unidade.")
-        if ok(r.uso_cota) and r.uso_cota < 50:
+        if ok(r.uso_cota) and r.uso_cota < LIMITE_CONCESSAO_MINIMA:
+            add("Crítico", r, "Concessão abaixo de 10% da cota",
+                f"{r.cestas_concedidas:.0f} cestas concedidas para uma cota de {r.cota_disponivel:.0f} "
+                f"({r.uso_cota:.1f}%).")
+        elif ok(r.uso_cota) and r.uso_cota < 50:
             add("Informativo", r, "Baixo uso da cota", f"Apenas {r.uso_cota:.0f}% da cota foi utilizada.")
         if ok(r.estoque) and r.estoque > 0:
             add("Atenção", r, "Cestas em estoque",
@@ -193,3 +206,81 @@ def alertas(df: pd.DataFrame, mes: str, limite_variacao: float = 30.0) -> pd.Dat
     ordem = {"Crítico": 0, "Atenção": 1, "Informativo": 2}
     res = pd.DataFrame(lista, columns=["Gravidade", "Unidade", "Tipo", "SAS", "Regra", "Detalhe"])
     return res.sort_values(by="Gravidade", key=lambda s: s.map(ordem), kind="stable").reset_index(drop=True)
+
+
+def destaque_recibos(df: pd.DataFrame, mes: str) -> pd.DataFrame:
+    """Unidades com mais recibos emitidos do que atendimentos sociais registrados no mês."""
+    u = por_unidade(df[df["mes"] == mes])
+    u = u[u["recibos_emitidos"] > u["atendimento_social"]]
+    return u.sort_values(["pct_recibos_sem_atendimento", "recibos_sem_atendimento"], ascending=False)
+
+
+def destaque_baixa_concessao(df: pd.DataFrame, mes: str) -> pd.DataFrame:
+    """Unidades com cota que concederam menos de 10% dela no mês."""
+    u = por_unidade(df[df["mes"] == mes])
+    u = u[(u["cota_disponivel"] > 0) & (u["uso_cota"] < LIMITE_CONCESSAO_MINIMA)]
+    return u.sort_values(["uso_cota", "cota_disponivel"], ascending=[True, False])
+
+
+# ------------------------------------------------------- grafias diferentes
+
+def _chave_nome(nome: str, tipo: str) -> str:
+    """'SAS JAÇÃNA/TREMEMBÉ - JT' e 'SAS JAÇANÃ/TREMEMBÉ - JT' -> mesma chave."""
+    n = unicodedata.normalize("NFKD", str(nome))
+    n = "".join(c for c in n if not unicodedata.combining(c)).lower()
+    if tipo == "SAS":
+        n = re.sub(r"^\s*sas\s+", "", n)
+        n = re.sub(r"\s+-\s*[a-z]{1,3}\s*$", "", n)  # sigla final ('- AS', '- SA')
+    return " ".join(re.findall(r"[a-z0-9]+", n))
+
+
+def mapa_nomes(df: pd.DataFrame) -> dict[str, str]:
+    """Une grafias diferentes do mesmo nome entre meses (acento trocado, sigla da SAS, nome abreviado)
+    e devolve nome -> grafia preferida (a usada em mais meses; no empate, a mais antiga). Nomes que
+    aparecem juntos num mesmo mês nunca são unidos."""
+    if df.empty:
+        return {}
+    d = df[["mes", "unidade", "tipo", "sas"]].copy()
+    d["sas"] = d["sas"].fillna("")
+    nomes = d.sort_values("mes").drop_duplicates("unidade", keep="last")
+    meses_do_nome = d.groupby("unidade")["mes"].apply(set).to_dict()
+    chave = {r.unidade: (r.tipo, _chave_nome(r.unidade, r.tipo)) for r in nomes.itertuples()}
+    primeiro_mes = d.groupby("unidade")["mes"].min().to_dict()
+    grupos: dict = {}
+    for nome, k in chave.items():
+        grupos.setdefault(k, []).append(nome)
+
+    # nome abreviado ('CREAS SÃO MIGUEL' x 'CREAS SÃO MIGUEL PAULISTA'): mesma SAS e tipo, nunca juntos
+    sas_do_nome = dict(zip(nomes["unidade"], nomes["sas"].map(lambda x: _chave_nome(x, "SAS"))))
+    chaves = list(grupos)
+    for i, (tipo, k1) in enumerate(chaves):
+        for tipo2, k2 in chaves[i + 1:]:
+            if tipo != tipo2 or tipo == "SAS" or (tipo, k1) not in grupos or (tipo2, k2) not in grupos:
+                continue
+            p1, p2 = set(k1.split()), set(k2.split())
+            if not (p1 < p2 or p2 < p1) or (p1 ^ p2) & {"i", "ii", "iii", "iv", "v", "1", "2", "3", "4"}:
+                continue
+            g1, g2 = grupos[(tipo, k1)], grupos[(tipo2, k2)]
+            if {sas_do_nome[n] for n in g1} != {sas_do_nome[n] for n in g2}:
+                continue
+            if set().union(*(meses_do_nome[n] for n in g1)) & set().union(*(meses_do_nome[n] for n in g2)):
+                continue
+            grupos[(tipo, k1)] = g1 + g2
+            del grupos[(tipo2, k2)]
+
+    mapa = {}
+    for membros in grupos.values():
+        if len(membros) > 1:
+            juntos = [meses_do_nome[n] for n in membros]
+            if any(a & b for i, a in enumerate(juntos) for b in juntos[i + 1:]):
+                continue
+            canonico = min(membros, key=lambda n: (-len(meses_do_nome[n]), primeiro_mes[n], n))
+            mapa.update({n: canonico for n in membros if n != canonico})
+    return mapa
+
+
+def unificar_nomes(df: pd.DataFrame, mapa: dict[str, str] | None = None) -> pd.DataFrame:
+    mapa = mapa_nomes(df) if mapa is None else mapa
+    if not mapa:
+        return df
+    return df.assign(unidade=df["unidade"].replace(mapa), sas=df["sas"].replace(mapa))
