@@ -283,12 +283,18 @@ def pagina_importar():
                + f" · mês(es): {', '.join(rotulo_mes(m) for m in meses)}")
 
     existentes = set(df_hist["mes"]) & set(meses) if not df_hist.empty else set()
+    substituir = False
     if existentes:
-        st.info(f"Já existem dados de {', '.join(rotulo_mes(m) for m in sorted(existentes))}. "
-                "Ao salvar, as unidades com o mesmo nome serão substituídas.", icon="ℹ️")
+        rotulos = ", ".join(rotulo_mes(m) for m in sorted(existentes))
+        st.info(f"Já existem dados salvos de {rotulos}. Reimportar **substitui** os valores (não soma).",
+                icon="ℹ️")
+        substituir = st.checkbox(f"Substituir {rotulos} por inteiro (apaga o que já está salvo desse mês antes de "
+                                 "gravar; use para corrigir uma importação errada)", value=True,
+                                 help="Desmarque só se este arquivo complementa o que já foi importado no mês "
+                                      "(por exemplo, o PDF por CRAS enviado depois do PDF por SAS).")
     c1, c2 = st.columns([1, 4])
     if c1.button("💾 Salvar no histórico", type="primary", disabled=editado["mes"].isna().any()):
-        n = banco.salvar(editado, st.session_state.get("origem", ""))
+        n = banco.salvar(editado, st.session_state.get("origem", ""), substituir_meses=substituir)
         st.session_state.pop("previa", None)
         recarregar()
         st.success(f"{n} registros salvos.")
@@ -602,10 +608,42 @@ def pagina_dados():
                  .rename(columns={"arquivo": "Arquivo de origem", "importado_em": "Importado em"}),
                  hide_index=True, width="stretch", column_config=CONFIG_NUMEROS)
 
+    with st.expander("✏️ Corrigir dados salvos"):
+        st.caption("Altere os números direto na tabela, inclua linhas no fim ou apague linhas (selecione e "
+                   "tecle Delete). Ao salvar, o mês fica exatamente como na tabela.")
+        gravados = banco.carregar()  # nomes exatamente como estão no banco
+        mes_corr = st.selectbox("Mês", meses[::-1], format_func=rotulo_mes, key="corr_mes")
+        colunas = ["mes", "sas", "unidade", "tipo", *CAMPOS]
+        atual = (gravados[gravados["mes"] == mes_corr][colunas]
+                 .assign(_o=lambda d: d["tipo"] != "SAS").sort_values(["sas", "_o", "unidade"])
+                 .drop(columns="_o").reset_index(drop=True))
+        corrigido = st.data_editor(
+            atual, num_rows="dynamic", width="stretch", hide_index=True, key=f"corr_{mes_corr}",
+            column_config={
+                "mes": st.column_config.TextColumn("Mês (AAAA-MM)", validate=r"^20\d{2}-(0[1-9]|1[0-2])$",
+                                                   required=True, default=mes_corr),
+                "sas": st.column_config.TextColumn("SAS"),
+                "unidade": st.column_config.TextColumn("Unidade", required=True),
+                "tipo": st.column_config.SelectboxColumn("Tipo", options=TIPOS, required=True),
+                **{c: st.column_config.NumberColumn(r, min_value=0, step=1) for c, r in CAMPOS.items()},
+            })
+        corrigido = corrigido.dropna(subset=["unidade"])
+        corrigido = corrigido[corrigido["unidade"].astype(str).str.strip() != ""]
+        if st.button("💾 Salvar correções", type="primary", key="corr_salvar"):
+            if corrigido["mes"].isna().any() or corrigido["tipo"].isna().any():
+                st.error("Preencha o mês e o tipo de todas as linhas.")
+            else:
+                outros = sorted(set(corrigido["mes"]) - {mes_corr})
+                # o mês corrigido fica exatamente como na tabela (linhas apagadas saem do histórico)
+                n = banco.salvar(corrigido, "correção manual", apagar_meses=(mes_corr,))
+                recarregar()
+                aviso = f" Linhas movidas para {', '.join(rotulo_mes(m) for m in outros)}." if outros else ""
+                st.success(f"{rotulo_mes(mes_corr)} corrigido: {n} registros salvos.{aviso}")
+                st.rerun()
+
     with st.expander("🗑️ Excluir dados"):
         c1, c2, c3 = st.columns([2, 3, 1])
         mes = c1.selectbox("Mês", meses, format_func=rotulo_mes, key="del_mes")
-        gravados = banco.carregar()  # nomes exatamente como estão no banco
         unidades = ["(todas as unidades do mês)", *sorted(gravados[gravados["mes"] == mes]["unidade"])]
         unidade = c2.selectbox("Unidade", unidades, key="del_unid")
         c3.write("")

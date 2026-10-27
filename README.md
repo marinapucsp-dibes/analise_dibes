@@ -91,7 +91,12 @@ O sistema localiza sozinho a linha de cabeçalho e reconhece variações de nome
 - **Grafias diferentes** do mesmo nome entre meses (ex.: “JAÇANÃ” × “JAÇÃNA”, “SANTO AMARO - AS” × “- SA”,
   “CREAS SÃO MIGUEL” × “CREAS SÃO MIGUEL PAULISTA”) são unificadas automaticamente, para não quebrar a
   comparação mês a mês. Nomes que aparecem juntos num mesmo mês nunca são unidos.
-- Antes de salvar, a **prévia é editável**. Reimportar um mês substitui os dados das mesmas unidades.
+- Antes de salvar, a **prévia é editável**.
+- **Reimportar um mês substitui, não soma.** Se o mês já existe, a opção “Substituir o mês por inteiro”
+  (marcada por padrão) apaga o que estava salvo daquele mês antes de gravar, para corrigir uma importação
+  errada. Desmarque só quando o arquivo complementa o mês (ex.: PDF por CRAS enviado depois do PDF por SAS).
+- Para ajustar poucos números, use **Histórico e relatório → ✏️ Corrigir dados salvos**: a tabela do mês
+  pode ser editada direto (alterar, incluir ou apagar linhas).
 
 ## Páginas
 

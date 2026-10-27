@@ -327,3 +327,20 @@ def test_analise_por_ia_monta_o_pedido(monkeypatch):
     assert enviado["fallbacks"] == "default" and enviado["betas"] == ["server-side-fallback-2026-07-01"]
     pedido = enviado["messages"][0]["content"]
     assert "SAS NORTE - NO" in pedido and "CRAS NORTE II" in pedido and "Recomendações" in pedido
+
+
+def test_reimportar_substitui_e_nao_soma(tmp_path):
+    caminho = tmp_path / "t.db"
+    errado = _unidades(**{"CRAS A": {"cestas_concedidas": 999}, "CRAS ERRADO": {}})
+    banco.salvar(errado, "abril errado", caminho)
+    certo = _unidades(**{"CRAS A": {"cestas_concedidas": 40}})
+    # reimportar sem substituir o mês: troca os valores da unidade, mas a unidade errada sobra
+    banco.salvar(certo, "abril certo", caminho)
+    df = banco.carregar(caminho).set_index("unidade")
+    assert df.loc["CRAS A", "cestas_concedidas"] == 40 and "CRAS ERRADO" in df.index
+    # substituindo o mês inteiro, sobra só o que veio no arquivo novo
+    banco.salvar(certo, "abril certo", caminho, substituir_meses=True)
+    assert list(banco.carregar(caminho)["unidade"]) == ["CRAS A"]
+    # correção manual que move a linha para outro mês esvazia o mês original
+    banco.salvar(certo.assign(mes="2026-06"), "correção manual", caminho, apagar_meses=("2026-05",))
+    assert list(banco.carregar(caminho)["mes"]) == ["2026-06"]

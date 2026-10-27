@@ -60,8 +60,13 @@ def _engine(url: str) -> Engine:
     return engine
 
 
-def salvar(df: pd.DataFrame, arquivo: str = "", url: str | None = None) -> int:
-    """Grava (ou substitui) os registros de cada unidade/mês. Retorna a quantidade gravada."""
+def salvar(df: pd.DataFrame, arquivo: str = "", url: str | None = None, substituir_meses: bool = False,
+           apagar_meses: tuple[str, ...] = ()) -> int:
+    """Grava (ou substitui) os registros de cada unidade/mês. Retorna a quantidade gravada.
+
+    Com substituir_meses=True, apaga antes tudo o que existe dos meses presentes em df (para corrigir
+    uma importação errada sem deixar sobrar unidades antigas). apagar_meses esvazia também outros meses.
+    Tudo numa única transação: se algo falhar, nada é alterado."""
     agora = datetime.now().isoformat(timespec="seconds")
     linhas = [
         {"mes": r.mes, "unidade": r.unidade.strip(), "tipo": r.tipo, "arquivo": arquivo, "importado_em": agora,
@@ -70,6 +75,9 @@ def salvar(df: pd.DataFrame, arquivo: str = "", url: str | None = None) -> int:
         for r in df.itertuples(index=False)
     ]
     with conectar(url).begin() as con:
+        meses = set(apagar_meses) | ({l["mes"] for l in linhas} if substituir_meses else set())
+        for mes in meses:
+            con.execute(delete(registros).where(registros.c.mes == mes))
         for l in linhas:
             con.execute(delete(registros).where(registros.c.mes == l["mes"], registros.c.unidade == l["unidade"]))
         if linhas:
