@@ -236,8 +236,9 @@ def _chave_nome(nome: str, tipo: str) -> str:
 
 def mapa_nomes(df: pd.DataFrame) -> dict[str, str]:
     """Une grafias diferentes do mesmo nome entre meses (acento trocado, sigla da SAS, nome abreviado)
-    e devolve nome -> grafia preferida (a usada em mais meses; no empate, a mais antiga). Nomes que
-    aparecem juntos num mesmo mês nunca são unidos."""
+    e devolve nome -> grafia preferida. Prefere a grafia vinda de HTML (sai direto do sistema; a de PDF
+    pode ter erros de extração), depois o nome mais completo, a usada em mais meses e a mais antiga.
+    Nomes que aparecem juntos num mesmo mês nunca são unidos."""
     if df.empty:
         return {}
     d = df[["mes", "unidade", "tipo", "sas"]].copy()
@@ -246,6 +247,8 @@ def mapa_nomes(df: pd.DataFrame) -> dict[str, str]:
     meses_do_nome = d.groupby("unidade")["mes"].apply(set).to_dict()
     chave = {r.unidade: (r.tipo, _chave_nome(r.unidade, r.tipo)) for r in nomes.itertuples()}
     primeiro_mes = d.groupby("unidade")["mes"].min().to_dict()
+    arquivos = df["arquivo"].fillna("").astype(str).str.lower() if "arquivo" in df else pd.Series("", index=df.index)
+    de_html = set(df.loc[arquivos.str.contains("html|htm"), "unidade"])
     grupos: dict = {}
     for nome, k in chave.items():
         grupos.setdefault(k, []).append(nome)
@@ -274,7 +277,8 @@ def mapa_nomes(df: pd.DataFrame) -> dict[str, str]:
             juntos = [meses_do_nome[n] for n in membros]
             if any(a & b for i, a in enumerate(juntos) for b in juntos[i + 1:]):
                 continue
-            canonico = min(membros, key=lambda n: (-len(meses_do_nome[n]), primeiro_mes[n], n))
+            canonico = min(membros, key=lambda n: (n not in de_html, -len(n.split()), -len(meses_do_nome[n]),
+                                                     primeiro_mes[n], n))
             mapa.update({n: canonico for n in membros if n != canonico})
     return mapa
 

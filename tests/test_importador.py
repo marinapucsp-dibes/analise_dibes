@@ -1,4 +1,5 @@
 import io
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -344,3 +345,22 @@ def test_reimportar_substitui_e_nao_soma(tmp_path):
     # correção manual que move a linha para outro mês esvazia o mês original
     banco.salvar(certo.assign(mes="2026-06"), "correção manual", caminho, apagar_meses=("2026-05",))
     assert list(banco.carregar(caminho)["mes"]) == ["2026-06"]
+
+
+def test_grafia_do_html_prevalece_sobre_a_do_pdf():
+    linhas = [("2026-0%d" % m, "CRAS VILA CURUÇA", "CRAS", "SAS IT", "fev 2.pdf") for m in (2, 3, 4, 5)]
+    linhas += [("2026-01", "CRAS VILA CURUÇÁ", "CRAS", "SAS IT", "código HTML colado"),
+               ("2026-08", "CRAS VILA CURUÇÁ", "CRAS", "SAS IT", "agosto.html")]
+    df = pd.DataFrame(linhas, columns=["mes", "unidade", "tipo", "sas", "arquivo"])
+    # mesmo com mais meses vindos de PDF, vale a grafia que veio do HTML
+    assert analise.mapa_nomes(df) == {"CRAS VILA CURUÇA": "CRAS VILA CURUÇÁ"}
+
+
+def test_chave_abreviada_na_lista_js_usa_o_titulo_da_tabela():
+    codigo = PAINEL_JS.replace("cestasRecebidas", "sol").replace("Cestas Recebidas", "Cestas Solicitadas")
+    r = importador.importar_html_colado(codigo)
+    assert not r.avisos
+    assert r.dados.set_index("unidade").loc["CRAS NORTE II", "quantidade_solicitada"] == 30
+    # sem tabela na página para confirmar, a chave desconhecida não é adivinhada
+    sem_tabela = re.sub(r"<table.*?</table>", "", codigo, flags=re.S)
+    assert any("Quantidade Solicitada" in a for a in importador.importar_html_colado(sem_tabela).avisos)

@@ -242,12 +242,12 @@ def pagina_importar():
             resultado.dados.loc[sem, "sas"] = resultado.dados.loc[sem, "unidade"].str.upper().map(mapa)
         # nomes escritos de outro jeito que no histórico passam a usar a grafia do histórico
         if not df_hist.empty and not resultado.dados.empty:
-            novos = resultado.dados
+            novos = resultado.dados.assign(arquivo=st.session_state.get("origem", ""))
             outros_meses = df_hist[~df_hist["mes"].isin(set(novos["mes"]))]
             mapa = analise.mapa_nomes(pd.concat([outros_meses, novos], ignore_index=True))
             mapa = {k: v for k, v in mapa.items() if k in set(novos["unidade"]) | set(novos["sas"].dropna())}
             if mapa:
-                resultado.dados = analise.unificar_nomes(novos, mapa)
+                resultado.dados = analise.unificar_nomes(novos, mapa).drop(columns="arquivo")
                 resultado.avisos.append("Nomes ajustados para a grafia já usada no histórico: "
                                         + "; ".join(f"{k} → {v}" for k, v in mapa.items()) + ".")
         st.session_state["previa"] = resultado

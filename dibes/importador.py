@@ -338,9 +338,35 @@ def grades_js(codigo: str) -> dict[str, list[list]]:
     return grades
 
 
+def _cabecalho_html(codigo: str) -> list[str]:
+    """Títulos da tabela da página (ex.: 'Cestas Solicitadas'), mesmo que a tabela venha vazia."""
+    for tabela in grade_do_html(codigo):
+        for linha in tabela[:3]:
+            if len(_mapear_cabecalho(linha)) >= 3:
+                return linha
+    return []
+
+
+def _completar_chaves(cabecalho: list[str], titulos: list[str]) -> list[str]:
+    """Troca chaves abreviadas da lista JavaScript (ex.: 'sol') pelo título da coluna na mesma posição
+    da tabela da página — só quando as chaves já reconhecidas estão nas mesmas posições dos títulos."""
+    if not titulos:
+        return cabecalho
+    campos_chave = [_campo_do_cabecalho(c)[0] for c in cabecalho]
+    campos_titulo = [_campo_do_cabecalho(t)[0] for t in titulos]
+    alinhado = all(c is None or (i < len(campos_titulo) and campos_titulo[i] == c)
+                   for i, c in enumerate(campos_chave))
+    if not alinhado:
+        return cabecalho
+    return [titulos[i] if c is None and i < len(titulos) and campos_titulo[i] else cabecalho[i]
+            for i, c in enumerate(campos_chave)]
+
+
 def ler_listas_js(codigo: str, nome: str, mes: str | None) -> ResultadoImportacao | None:
     resultados = []
+    titulos = _cabecalho_html(codigo)
     for nome_lista, grade in grades_js(codigo).items():
+        grade = [_completar_chaves(grade[0], titulos), *grade[1:]]
         r = interpretar_grade(grade, mes, origem=f"{nome} [{nome_lista}]")
         if not r.dados.empty:
             resultados.append(r)
