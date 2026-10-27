@@ -406,3 +406,33 @@ def test_emergencias_de_varios_meses_por_planilha_e_banco(tmp_path):
     # excluir o mês apaga também as emergências
     banco.excluir_mes("2026-03", caminho)
     assert banco.carregar_emergencias(caminho).empty
+
+
+def test_nome_que_junta_duas_unidades_nao_e_unido():
+    linhas = [("2026-08", "CREAS JAÇANÃ", "CREAS", "SAS JT"), ("2026-08", "CREAS TREMEMBÉ", "CREAS", "SAS JT"),
+              ("2026-08", "CRAS TREMEMBÉ", "CRAS", "SAS JT"),
+              ("2026-09", "CREAS JAÇANÃ/TREMEMBÉ", "CREAS", "SAS JT"), ("2026-09", "CRAS TREMEMBÉ", "CRAS", "SAS JT")]
+    df = pd.DataFrame(linhas, columns=["mes", "unidade", "tipo", "sas"])
+    assert analise.mapa_nomes(df) == {}
+
+
+def test_lista_js_aninhada_e_chaves_curtas(tmp_path):
+    codigo = (PAINEL_JS.replace("const ", "var ").replace("cestasRecebidas", "sol")
+              .replace("recibosValidos", "recibos").replace("entregues:", "ent:")
+              .replace("Cestas Recebidas", "Cestas Solicitadas")
+              .replace("function populateTable", 'var histData = [{name:"SAS NORTE - NO",months:[{m:"ago/2025",'
+                       'sol:250,ent:224},{m:"set/2025",sol:0,ent:90}]}];\nfunction populateTable'))
+    r = importador.finalizar(importador.importar_html_colado(codigo))
+    assert not r.avisos
+    assert set(r.dados["tipo"]) == {"SAS", "CRAS", "CREAS", "Centro POP"}  # nada de 'ago/2025' como unidade
+    linha = r.dados.set_index("unidade").loc["CRAS NORTE II"]
+    assert (linha["quantidade_solicitada"], linha["cestas_concedidas"]) == (30, 21)
+
+
+def test_mes_salvo_com_grafia_errada_e_corrigido_pelo_html_mais_recente():
+    linhas = [("2026-01", "CRAS VILA CURUÇÁ", "código HTML colado")]
+    linhas += [("2026-0%d" % m, "CRAS VILA CURUÇA", "fev.pdf") for m in (2, 3, 4, 5, 6, 7)]
+    linhas += [("2026-08", "CRAS VILA CURUÇA", "código HTML colado"),  # salvo já com a grafia do PDF
+               ("2026-09", "CRAS VILA CURUÇÁ", "código HTML colado")]
+    df = pd.DataFrame(linhas, columns=["mes", "unidade", "arquivo"]).assign(tipo="CRAS", sas="SAS IT")
+    assert analise.mapa_nomes(df) == {"CRAS VILA CURUÇA": "CRAS VILA CURUÇÁ"}

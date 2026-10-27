@@ -236,8 +236,8 @@ def _chave_nome(nome: str, tipo: str) -> str:
 
 def mapa_nomes(df: pd.DataFrame) -> dict[str, str]:
     """Une grafias diferentes do mesmo nome entre meses (acento trocado, sigla da SAS, nome abreviado)
-    e devolve nome -> grafia preferida. Prefere a grafia vinda de HTML (sai direto do sistema; a de PDF
-    pode ter erros de extração), depois o nome mais completo, a usada em mais meses e a mais antiga.
+    e devolve nome -> grafia preferida. Prefere a grafia do HTML mais recente (sai direto do sistema; a de
+    PDF pode ter erros de extração), depois o nome mais completo, a usada em mais meses e a mais antiga.
     Nomes que aparecem juntos num mesmo mês nunca são unidos."""
     if df.empty:
         return {}
@@ -248,13 +248,15 @@ def mapa_nomes(df: pd.DataFrame) -> dict[str, str]:
     chave = {r.unidade: (r.tipo, _chave_nome(r.unidade, r.tipo)) for r in nomes.itertuples()}
     primeiro_mes = d.groupby("unidade")["mes"].min().to_dict()
     arquivos = df["arquivo"].fillna("").astype(str).str.lower() if "arquivo" in df else pd.Series("", index=df.index)
-    de_html = set(df.loc[arquivos.str.contains("html|htm"), "unidade"])
+    ultimo_html = df[arquivos.str.contains("html|htm")].groupby("unidade")["mes"].max().to_dict()
     grupos: dict = {}
     for nome, k in chave.items():
         grupos.setdefault(k, []).append(nome)
 
     # nome abreviado ('CREAS SÃO MIGUEL' x 'CREAS SÃO MIGUEL PAULISTA'): mesma SAS e tipo, nunca juntos
     sas_do_nome = dict(zip(nomes["unidade"], nomes["sas"].map(lambda x: _chave_nome(x, "SAS"))))
+    genericas = {"cras", "creas", "centro", "pop", "de", "do", "da", "dos", "das"}
+    palavras_do_nome = {n: set(k.split()) - genericas for n, (t, k) in chave.items() if t != "SAS"}
     chaves = list(grupos)
     for i, (tipo, k1) in enumerate(chaves):
         for tipo2, k2 in chaves[i + 1:]:
@@ -265,6 +267,11 @@ def mapa_nomes(df: pd.DataFrame) -> dict[str, str]:
                 continue
             g1, g2 = grupos[(tipo, k1)], grupos[(tipo2, k2)]
             if {sas_do_nome[n] for n in g1} != {sas_do_nome[n] for n in g2}:
+                continue
+            # 'CREAS JAÇANÃ/TREMEMBÉ' x 'CREAS JAÇANÃ': a palavra a mais é o nome de outra unidade da SAS
+            vizinhos = [palavras for n, palavras in palavras_do_nome.items()
+                        if n not in g1 and n not in g2 and sas_do_nome[n] in {sas_do_nome[x] for x in g1}]
+            if any((p1 ^ p2) & palavras for palavras in vizinhos):
                 continue
             if set().union(*(meses_do_nome[n] for n in g1)) & set().union(*(meses_do_nome[n] for n in g2)):
                 continue
@@ -277,10 +284,17 @@ def mapa_nomes(df: pd.DataFrame) -> dict[str, str]:
             juntos = [meses_do_nome[n] for n in membros]
             if any(a & b for i, a in enumerate(juntos) for b in juntos[i + 1:]):
                 continue
-            canonico = min(membros, key=lambda n: (n not in de_html, -len(n.split()), -len(meses_do_nome[n]),
-                                                     primeiro_mes[n], n))
+            # a grafia do HTML mais recente vence (se um mês antigo foi salvo com a grafia errada, o mês
+            # novo corrige); depois o nome mais completo, o usado em mais meses e o mais antigo
+            canonico = min(membros, key=lambda n: (n not in ultimo_html, _inverso(ultimo_html.get(n, "")),
+                                                     -len(n.split()), -len(meses_do_nome[n]), primeiro_mes[n], n))
             mapa.update({n: canonico for n in membros if n != canonico})
     return mapa
+
+
+def _inverso(mes: str) -> tuple:
+    """Chave para ordenar meses do mais recente para o mais antigo."""
+    return tuple(-int(p) for p in mes.split("-")) if mes else (0,)
 
 
 def unificar_nomes(df: pd.DataFrame, mapa: dict[str, str] | None = None) -> pd.DataFrame:

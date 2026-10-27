@@ -381,6 +381,8 @@ def grades_js(codigo: str) -> dict[str, list[list]]:
     """Listas de objetos JavaScript (const dados = [{nome:"...", cotas:10}, ...]) como grades."""
     grades = {}
     for nome_lista, corpo in _RE_LISTA.findall(codigo):
+        if "[" in corpo:
+            continue  # listas dentro de listas (ex.: histórico por mês de cada SAS) não são tabela de unidades
         objetos = []
         for obj in _RE_OBJETO.findall(corpo):
             pares = {}
@@ -420,7 +422,7 @@ def _completar_chaves(cabecalho: list[str], titulos: list[str]) -> list[str]:
     campos_titulo = [_campo_do_cabecalho(t)[0] for t in titulos]
     alinhado = all(c is None or (i < len(campos_titulo) and campos_titulo[i] == c)
                    for i, c in enumerate(campos_chave))
-    if not alinhado:
+    if not alinhado or sum(c is not None for c in campos_chave) < 2:
         return cabecalho
     return [titulos[i] if c is None and i < len(titulos) and campos_titulo[i] else cabecalho[i]
             for i, c in enumerate(campos_chave)]
