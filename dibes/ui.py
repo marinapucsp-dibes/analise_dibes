@@ -21,6 +21,10 @@ def usar_banco_dos_secrets():
     """Na nuvem, o endereço do banco (Supabase/Neon) vem dos Secrets."""
     if segredo("DIBES_DATABASE_URL"):
         os.environ.setdefault("DIBES_DATABASE_URL", segredo("DIBES_DATABASE_URL"))
+    if not os.environ.get("DIBES_DATABASE_URL"):
+        st.sidebar.error("⚠️ **Sem banco de dados permanente.** O endereço do Supabase (DIBES_DATABASE_URL) "
+                         "não está nos Secrets deste app: o que for gravado aqui é apagado quando o app "
+                         "reinicia ou dorme. Configure os Secrets antes de lançar dados.")
 
 
 def exigir_senha(titulo: str):
