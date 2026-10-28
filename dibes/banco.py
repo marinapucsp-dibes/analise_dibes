@@ -14,6 +14,7 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy import Column, Float, MetaData, String, Table, create_engine, delete, inspect, select, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import DBAPIError
 
 from . import importador
 from .config import CAMPOS
@@ -87,15 +88,20 @@ def _migrar_emergencias(engine: Engine):
     """A tabela antiga guardava uma linha por ocorrência (com o nome): passa a valer o resumo do mês."""
     if "emergencias" not in inspect(engine).get_table_names():
         return
-    with engine.begin() as con:
-        antigas = con.execute(text("SELECT mes, COUNT(*) AS n, SUM(cestas) AS cestas, MAX(arquivo) AS arquivo, "
-                                   "MAX(importado_em) AS em FROM emergencias GROUP BY mes")).all()
-        ja = {r[0] for r in con.execute(select(emergencias.c.mes))}
-        novas = [{"mes": m, "ocorrencias": float(n), "cestas": c, "arquivo": a, "importado_em": em}
-                 for m, n, c, a, em in antigas if m not in ja]
-        if novas:
-            con.execute(emergencias.insert(), novas)
-        con.execute(text("DROP TABLE emergencias"))
+    try:
+        with engine.begin() as con:
+            antigas = con.execute(text("SELECT mes, COUNT(*) AS n, SUM(cestas) AS cestas, MAX(arquivo) AS arquivo, "
+                                       "MAX(importado_em) AS em FROM emergencias GROUP BY mes")).all()
+            ja = {r[0] for r in con.execute(select(emergencias.c.mes))}
+            novas = [{"mes": m, "ocorrencias": float(n), "cestas": c, "arquivo": a, "importado_em": em}
+                     for m, n, c, a, em in antigas if m not in ja]
+            if novas:
+                con.execute(emergencias.insert(), novas)
+            con.execute(text("DROP TABLE IF EXISTS emergencias"))
+    except DBAPIError:
+        # o outro app (Cestas Básicas ou Monitoramento Anual) fez a conversão ao mesmo tempo
+        if "emergencias" in inspect(engine).get_table_names():
+            raise
 
 
 def salvar(df: pd.DataFrame, arquivo: str = "", url: str | None = None, substituir_meses: bool = False,
