@@ -17,6 +17,7 @@ PASSAGENS = "Benefício Eventual Passagens"
 SIGRC = "SIGRC"
 SEI = "SEI"
 PBF = "Programa Bolsa Família (PBF)"
+CARTEIRA_IDOSO = "Carteira da Pessoa Idosa"
 OUTROS = "Outros"
 
 # atividade -> [(indicador, rótulo, unidade)]; unidade "R$" = valor em reais
@@ -41,6 +42,7 @@ CATALOGO: dict[str, list[tuple[str, str, str]]] = {
         ("manutencoes_lote", "Manutenções realizadas em lote", "n"),
         ("manutencoes_manuais", "Manutenções realizadas manualmente", "n"),
     ],
+    CARTEIRA_IDOSO: [("carteiras_idoso_emitidas", "Carteiras da Pessoa Idosa emitidas", "n")],
 }
 # vêm do sistema de cestas; só são digitadas para meses que não estão lá
 AUTOMATICOS = {"cestas_concedidas_sas", "cestas_emergencias"}

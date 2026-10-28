@@ -29,6 +29,7 @@ SECOES = {
     anual.SIGRC: ["sigrc"],
     anual.SEI: ["sei"],
     anual.PBF: ["pbf", "bolsa familia"],
+    anual.CARTEIRA_IDOSO: ["carteira", "pessoa idosa"],
     anual.OUTROS: ["outros", "outras"],
 }
 
@@ -51,6 +52,8 @@ APELIDOS = {
                               "processos", "sei"],
     "manutencoes_lote": ["em lote", "lote"],
     "manutencoes_manuais": ["manualmente", "manuais", "manual"],
+    "carteiras_idoso_emitidas": ["carteiras da pessoa idosa", "carteira da pessoa idosa", "carteiras emitidas",
+                                 "carteira do idoso", "carteiras", "carteira"],
 }
 # termos genéricos que dependem da seção em que aparecem
 GENERICOS = {

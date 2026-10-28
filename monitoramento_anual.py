@@ -107,18 +107,21 @@ def pagina_painel():
     reais(c[2], "Valor gasto com passagens", t(P, "Valor gasto com passagens"))
     reais(c[3], "Custo médio por passagem", t(P, "Custo médio por passagem"))
     st.markdown("**📨 Demais atividades**")
-    c = st.columns(4)
+    c = st.columns(5)
     c[0].metric("Protocolos SIGRC respondidos", fmt(t(anual.SIGRC, "Protocolos respondidos")), border=True)
     c[1].metric("Processos SEI respondidos", fmt(t(anual.SEI, "Processos SEI respondidos")), border=True)
     c[2].metric("Manutenções no PBF", fmt(t(anual.PBF, "Total de manutenções")), border=True)
     outros = quadro[quadro["atividade"] == anual.OUTROS]["Total"].sum(min_count=1)
-    c[3].metric("Outras ações", fmt(outros), border=True)
+    c[3].metric("Carteiras emitidas", fmt(t(anual.CARTEIRA_IDOSO, "Carteiras da Pessoa Idosa emitidas")),
+                border=True, help="Carteiras da Pessoa Idosa emitidas no ano")
+    c[4].metric("Outras ações", fmt(outros), border=True)
 
     lancados = anual.meses_lancados(carregar_atividades(), ano)
     situacao = " · ".join(f"{'✅' if lancados.get(i + 1) else '⬜'} {m}" for i, m in enumerate(anual.MESES_COLUNAS))
     st.caption(f"Meses com lançamentos em {ano}: {situacao}")
 
-    abas = st.tabs(["🧺 Alimentação", "🚌 Passagens", "📨 SIGRC e SEI", "👨‍👩‍👧 PBF", "➕ Outros", "📋 Quadro completo"])
+    abas = st.tabs(["🧺 Alimentação", "🚌 Passagens", "📨 SIGRC e SEI", "👨‍👩‍👧 PBF", "👵 Carteira da Pessoa Idosa",
+                    "➕ Outros", "📋 Quadro completo"])
     with abas[0]:
         grafico({"Concedidas (SAS/unidades)": serie(quadro, A, "Cestas concedidas (SAS/unidades)"),
                  "Concedidas em emergências": serie(quadro, A, "Cestas concedidas em emergências"),
@@ -167,6 +170,11 @@ def pagina_painel():
                 "Manutenções no PBF", empilhar=True)
         st.dataframe(tabela_exibicao(quadro[quadro["atividade"] == anual.PBF]), hide_index=True, width="stretch")
     with abas[4]:
+        grafico({"Carteiras emitidas": serie(quadro, anual.CARTEIRA_IDOSO, "Carteiras da Pessoa Idosa emitidas")},
+                "Carteiras da Pessoa Idosa emitidas")
+        st.dataframe(tabela_exibicao(quadro[quadro["atividade"] == anual.CARTEIRA_IDOSO]), hide_index=True,
+                     width="stretch")
+    with abas[5]:
         outros_q = quadro[quadro["atividade"] == anual.OUTROS]
         if outros_q.empty:
             st.info("Nenhuma outra atividade lançada neste ano. Use ✍️ Lançar mês → Outros.")
@@ -174,7 +182,7 @@ def pagina_painel():
             grafico({r["indicador"]: r[list(range(1, 13))] for _, r in outros_q.iterrows()}, "Outras ações",
                     empilhar=True)
             st.dataframe(tabela_exibicao(outros_q), hide_index=True, width="stretch")
-    with abas[5]:
+    with abas[6]:
         for atividade in [*anual.CATALOGO, anual.OUTROS]:
             parte = quadro[quadro["atividade"] == atividade]
             if not parte.empty:

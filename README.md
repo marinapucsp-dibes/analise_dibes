@@ -175,6 +175,7 @@ as atividades da DIBES e acompanhar o ano (Jan a Dez + Total):
 | SIGRC | Protocolos respondidos |
 | SEI | Processos SEI respondidos |
 | Programa Bolsa Família (PBF) | Manutenções em lote e manuais |
+| Carteira da Pessoa Idosa | Carteiras emitidas |
 | Outros | Nome livre da atividade e n.º de ações |
 
 Indicadores calculados: total de cestas concedidas, custo médio por cesta comprada, taxa de atendimento

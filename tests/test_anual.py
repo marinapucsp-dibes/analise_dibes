@@ -133,3 +133,13 @@ def test_mes_sem_lancamentos_nao_quebra_filtros():
                             "valor": [10.0]})
     base = anual.lancamentos(vazio, sistema)
     assert list(base.columns) == ["mes", "atividade", "indicador", "valor"] and len(base) == 1
+
+
+def test_carteira_da_pessoa_idosa_no_quadro_e_na_importacao():
+    csv = "Indicador;Jan;Fev\nCarteira da Pessoa Idosa emitida;12;30\nProtocolos SIGRC respondidos;5;6\n"
+    r = importador_anual.importar_arquivo(csv.encode(), "carteira.csv", "2026")
+    assert _valores(r)[("2026-02", "carteiras_idoso_emitidas")] == 30
+    assert _valores(r)[("2026-01", "protocolos_respondidos")] == 5
+    q = anual.quadro_anual(r.dados, "2026")
+    linha = q[q["indicador"] == "Carteiras da Pessoa Idosa emitidas"].iloc[0]
+    assert linha["atividade"] == anual.CARTEIRA_IDOSO and linha["Total"] == 42

@@ -64,7 +64,7 @@ def gerar_pdf_anual(quadro: pd.DataFrame, ano: str, por_sas: pd.DataFrame) -> by
     meses = anual.MESES_COLUNAS
     larguras = [5.2 * cm] + [1.6 * cm] * 12 + [2.2 * cm]
     corpo = [Paragraph(f"Monitoramento Anual DIBES — {ano}", TITULO),
-             Paragraph("Atividades lançadas mês a mês · Benefícios Eventuais, SIGRC, SEI, PBF e outras ações",
+             Paragraph("Atividades lançadas mês a mês · Benefícios Eventuais, SIGRC, SEI, PBF, Carteira da Pessoa Idosa e outras ações",
                        SUBTITULO)]
     for atividade in [*anual.CATALOGO, anual.OUTROS]:
         parte = quadro[quadro["atividade"] == atividade]
