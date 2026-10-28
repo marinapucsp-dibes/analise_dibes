@@ -194,7 +194,7 @@ def emergencias_mensal(por_mes: pd.DataFrame, titulo: str = "") -> go.Figure:
         x=_eixo_meses(por_mes["mes"]), y=por_mes["cestas"], marker=dict(color=SERIES[7], cornerradius=4), width=0.5,
         text=por_mes["cestas"].map(lambda v: f"{v:,.0f}".replace(",", ".")), textposition="outside",
         cliponaxis=False, textfont=dict(color=TINTA_MUDA), customdata=por_mes["ocorrencias"],
-        hovertemplate="%{x}<br>Cestas: %{y:,.0f}<br>Ocorrências: %{customdata}<extra></extra>",
+        hovertemplate="%{x}<br>Cestas: %{y:,.0f}<br>Ocorrências: %{customdata:,.0f}<extra></extra>",
     ))
     return _layout(fig, titulo, altura=340, eixo_y="Cestas")
 

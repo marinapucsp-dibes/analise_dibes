@@ -34,8 +34,8 @@ def gerar_excel(df: pd.DataFrame, emergencias: pd.DataFrame | None = None) -> by
         colunas = ["mes", "sas", "tipo", "unidade", *CAMPOS, *analise.INDICADORES]
         _formatar(analise.por_unidade(df)[colunas]).to_excel(xl, sheet_name="Por unidade", index=False)
         if emergencias is not None and not emergencias.empty:
-            e = emergencias.assign(mes=emergencias["mes"].map(rotulo_mes))[["mes", "ocorrencia", "cestas"]]
-            e.columns = ["Mês", "Localidade / Ocorrência", "Qtd. de Cestas"]
+            e = emergencias.assign(mes=emergencias["mes"].map(rotulo_mes))[["mes", "ocorrencias", "cestas"]]
+            e.columns = ["Mês", "N.º de ocorrências", "N.º de cestas concedidas"]
             e.to_excel(xl, sheet_name="Emergências", index=False)
         alertas = [analise.alertas(df, m).assign(**{"Mês": rotulo_mes(m)}) for m in meses]
         if alertas:

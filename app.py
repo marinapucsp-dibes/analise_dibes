@@ -208,6 +208,7 @@ def pagina_importar():
     if resultado is not None:
         for tabela in (resultado.dados, resultado.emergencias):
             tabela["mes"] = mes_escolhido if forcar else tabela["mes"].fillna(mes_escolhido)
+        resultado.emergencias = importador.resumir_emergencias(resultado.emergencias)
         # unidades sem SAS no arquivo recebem a SAS que tinham nas importações anteriores
         sem = resultado.dados["sas"].isna() & (resultado.dados["tipo"] != "SAS")
         if sem.any() and not df_hist.empty:
@@ -277,9 +278,9 @@ def pagina_importar():
         st.markdown("**🚨 Emergências encontradas no arquivo**")
         emergencias = editor_emergencias(previa.emergencias, f"emerg_{id(previa)}")
         meses_e = sorted(emergencias["mes"].dropna().unique())
-        st.caption(f"{len(emergencias)} ocorrências · {fmt(emergencias['cestas'].sum())} cestas · mês(es): "
-                   f"{', '.join(rotulo_mes(m) for m in meses_e)}. A lista de emergências de cada mês substitui "
-                   "a que já estava salva.")
+        st.caption(f"{fmt(emergencias['ocorrencias'].sum())} ocorrências · {fmt(emergencias['cestas'].sum())} "
+                   f"cestas · mês(es): {', '.join(rotulo_mes(m) for m in meses_e)}. Os números de cada mês "
+                   "substituem os que já estavam salvos.")
 
     faltando_mes = (tem_dados and editado["mes"].isna().any()) or (tem_emerg and emergencias["mes"].isna().any())
     c1, c2 = st.columns([1, 4])
@@ -305,33 +306,38 @@ def editor_emergencias(tabela: pd.DataFrame, chave: str) -> pd.DataFrame:
         column_config={
             "mes": st.column_config.TextColumn("Mês (AAAA-MM)", validate=r"^20\d{2}-(0[1-9]|1[0-2])$",
                                                required=True),
-            "ocorrencia": st.column_config.TextColumn("Localidade / Ocorrência", required=True, width="large"),
-            "cestas": st.column_config.NumberColumn("Qtd. de Cestas", min_value=0, step=1, required=True),
+            "ocorrencias": st.column_config.NumberColumn("N.º de ocorrências", min_value=0, step=1, format="%.0f"),
+            "cestas": st.column_config.NumberColumn("N.º de cestas concedidas", min_value=0, step=1,
+                                                    format="%.0f"),
         })
-    editada = editada.dropna(subset=["ocorrencia"])
-    return editada[editada["ocorrencia"].astype(str).str.strip() != ""]
+    return editada.dropna(subset=["ocorrencias", "cestas"], how="all")
 
 
 def lancar_emergencias(mes: str):
-    """Lançar, completar ou corrigir as emergências de qualquer mês."""
+    """Lançar ou corrigir o n.º de ocorrências e de cestas em emergências de qualquer mês."""
     st.write(f"Emergências de **{rotulo_mes(mes)}** (troque o mês no seletor acima). Concessões do Auxílio "
              "Alimentação em situações de emergência (enchentes, incêndios, desabamentos…), realizadas pelo CPAS.")
-    st.caption("Inclua linhas no fim da tabela, altere ou apague (selecione e tecle Delete) e salve. "
-               "Para lançar vários meses de uma vez, importe na aba **Arquivo** uma planilha com as colunas "
-               "**Mês**, **Localidade / Ocorrência** e **Qtd. de Cestas**.")
+    st.caption("Para lançar vários meses de uma vez, importe na aba **Arquivo** uma planilha com as colunas "
+               "**Mês**, **N.º de ocorrências** e **N.º de cestas concedidas**.")
     todas = carregar_emergencias()
-    do_mes = todas[todas["mes"] == mes][["mes", "ocorrencia", "cestas"]]
-    if do_mes.empty:
-        do_mes = pd.DataFrame({"mes": [mes], "ocorrencia": [""], "cestas": [float("nan")]})
-    editada = editor_emergencias(do_mes, f"lanc_emerg_{mes}")
-    st.caption(f"Total: {fmt(editada['cestas'].sum())} cestas em {len(editada)} ocorrências.")
-    if st.button("💾 Salvar emergências", type="primary", key="salvar_emerg"):
-        if editada["mes"].isna().any() or editada["cestas"].isna().any():
-            st.error("Preencha o mês e a quantidade de cestas de todas as linhas.")
-            return
-        n = banco.salvar_emergencias(editada, "digitação manual", meses=(mes,))
+    do_mes = todas[todas["mes"] == mes]
+    atual = do_mes.iloc[0] if not do_mes.empty else None
+
+    def valor(campo):
+        return None if atual is None or pd.isna(atual[campo]) else int(atual[campo])
+
+    with st.form(f"form_emerg_{mes}"):
+        c1, c2 = st.columns(2)
+        ocorrencias = c1.number_input("N.º de ocorrências", min_value=0, step=1, value=valor("ocorrencias"))
+        cestas = c2.number_input("N.º de cestas concedidas", min_value=0, step=1, value=valor("cestas"))
+        salvar = st.form_submit_button("💾 Salvar emergências", type="primary")
+    if salvar:
+        df = pd.DataFrame({"mes": [mes], "ocorrencias": [ocorrencias], "cestas": [cestas]}, dtype=object)
+        banco.salvar_emergencias(df.astype({"ocorrencias": float, "cestas": float}), "digitação manual",
+                                 meses=(mes,))
         recarregar()
-        st.success(f"{rotulo_mes(mes)}: {n} ocorrências salvas.")
+        st.success(f"{rotulo_mes(mes)}: emergências salvas." if ocorrencias is not None or cestas is not None
+                   else f"{rotulo_mes(mes)}: emergências apagadas.")
 
 
 def pagina_painel():
@@ -428,11 +434,9 @@ def painel_emergencias(mes: str):
     c1.metric("Cestas em emergências", fmt(do_mes["cestas"].sum()),
               fmt_delta(do_mes["cestas"].sum(), None if ant_linha is None else ant_linha["cestas"]),
               delta_color="off", border=True)
-    c2.metric("Ocorrências", len(do_mes), border=True)
-    tabela = do_mes.sort_values("cestas", ascending=False)[["ocorrencia", "cestas"]]
-    tabela.columns = ["Localidade / Ocorrência", "Qtd. de Cestas"]
-    st.dataframe(tabela, hide_index=True, width="stretch",
-                 column_config={"Qtd. de Cestas": st.column_config.NumberColumn(format="%.0f")})
+    c2.metric("Ocorrências", fmt(do_mes["ocorrencias"].sum()),
+              fmt_delta(do_mes["ocorrencias"].sum(), None if ant_linha is None else ant_linha["ocorrencias"]),
+              delta_color="off", border=True)
 
 
 def pagina_evolucao():

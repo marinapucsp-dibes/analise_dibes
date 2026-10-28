@@ -19,7 +19,7 @@ from .config import (APELIDOS, APELIDOS_MES, APELIDOS_SAS, APELIDOS_UNIDADE, CAM
                      MESES_ABREV, PALAVRAS_TOTAL)
 
 COLUNAS = ["mes", "sas", "unidade", "tipo", *CAMPOS]
-COLUNAS_EMERGENCIA = ["mes", "ocorrencia", "cestas"]
+COLUNAS_EMERGENCIA = ["mes", "ocorrencias", "cestas"]
 
 
 def _sem_emergencias() -> pd.DataFrame:
@@ -242,35 +242,66 @@ def _juntar(resultados: list[ResultadoImportacao]) -> ResultadoImportacao:
     for r in resultados:
         totais.update(r.totais_informados)
     emerg = [r.emergencias for r in resultados if not r.emergencias.empty]
-    emerg = pd.concat(emerg, ignore_index=True) if emerg else _sem_emergencias()
+    emerg = resumir_emergencias(pd.concat(emerg, ignore_index=True)) if emerg else _sem_emergencias()
     return ResultadoImportacao(dados, avisos, totais, emerg)
 
 
+def _eh_contagem(texto: str) -> bool:
+    """Cabeçalho de quantidade de ocorrências (ex.: 'N.º de ocorrências'), e não do nome da ocorrência."""
+    return "ocorrencia" in texto and "localidade" not in texto and (
+        texto.startswith(("n.", "n ", "no ", "numero", "qtd", "quant", "total")) or "ocorrencias" in texto)
+
+
 def ler_emergencias(grade: list[list], mes_padrao: str | None) -> pd.DataFrame:
-    """Tabela de emergências: colunas 'Localidade / Ocorrência' e 'Qtd. de Cestas' (e, opcional, 'Mês')."""
+    """Emergências por mês: n.º de ocorrências e de cestas concedidas.
+
+    Aceita a lista de ocorrências ('Localidade / Ocorrência' + 'Qtd. de Cestas', cada linha conta uma
+    ocorrência; os nomes não são guardados) ou o resumo mensal ('Mês', 'N.º de ocorrências', 'Cestas')."""
     grade = _limpar_grade(grade)
     for i, linha in enumerate(grade[:40]):
         textos = [normalizar(c) for c in linha]
-        col_oc = next((j for j, t in enumerate(textos)
-                       if any(p in t for p in ("ocorrencia", "localidade", "emergencia"))), None)
-        col_qt = next((j for j, t in enumerate(textos) if j != col_oc
+        col_n = next((j for j, t in enumerate(textos) if _eh_contagem(t)), None)
+        col_oc = next((j for j, t in enumerate(textos) if j != col_n
+                       and any(p in t for p in ("ocorrencia", "localidade", "emergencia"))), None)
+        col_qt = next((j for j, t in enumerate(textos) if j not in (col_oc, col_n)
                        and any(p in t for p in ("qtd", "quantidade", "cestas"))), None)
-        if col_oc is None or col_qt is None:
+        if col_qt is None or (col_oc is None and col_n is None):
             continue
-        col_mes = next((j for j, t in enumerate(textos) if j not in (col_oc, col_qt)
+        # coluna "Ocorrências" só com números: é a contagem, não o nome
+        if col_n is None and all(para_numero(l[col_oc]) is not None for l in grade[i + 1:] if str(l[col_oc]).strip()):
+            col_n, col_oc = col_oc, None
+        col_mes = next((j for j, t in enumerate(textos) if j not in (col_oc, col_qt, col_n)
                         and any(t.startswith(a) for a in APELIDOS_MES)), None)
         linhas = []
         for l in grade[i + 1:]:
-            ocorrencia = re.sub(r"\s+", " ", str(l[col_oc])).strip()
             cestas = para_numero(l[col_qt])
-            if not ocorrencia or cestas is None or eh_linha_total(ocorrencia):
+            if col_oc is not None:
+                nome = re.sub(r"\s+", " ", str(l[col_oc])).strip()
+                if not nome or eh_linha_total(nome):
+                    continue
+                n = 1
+            else:
+                n = para_numero(l[col_n])
+                if col_mes is not None and eh_linha_total(str(l[col_mes])):
+                    continue
+            if cestas is None and n is None:
                 continue
             mes = (detectar_mes(str(l[col_mes])) if col_mes is not None and str(l[col_mes]).strip() else None)
             if mes is None and col_mes is not None and hasattr(l[col_mes], "strftime"):
                 mes = l[col_mes].strftime("%Y-%m")
-            linhas.append({"mes": mes or mes_padrao, "ocorrencia": ocorrencia, "cestas": cestas})
-        return pd.DataFrame(linhas, columns=COLUNAS_EMERGENCIA)
+            linhas.append({"mes": mes or mes_padrao, "ocorrencias": n, "cestas": cestas})
+        return resumir_emergencias(pd.DataFrame(linhas, columns=COLUNAS_EMERGENCIA))
     return _sem_emergencias()
+
+
+def resumir_emergencias(emerg: pd.DataFrame) -> pd.DataFrame:
+    """Uma linha por mês, somando ocorrências e cestas (mês ainda indefinido fica numa linha própria)."""
+    if emerg.empty:
+        return _sem_emergencias()
+    return (emerg.groupby(emerg["mes"].fillna(""), as_index=False)
+            .agg(ocorrencias=("ocorrencias", lambda v: v.sum(min_count=1)),
+                 cestas=("cestas", lambda v: v.sum(min_count=1)))
+            .assign(mes=lambda d: d["mes"].replace("", None))[COLUNAS_EMERGENCIA])
 
 
 # --------------------------------------------------------- leitores por formato
@@ -335,6 +366,7 @@ def ler_html(codigo: str, nome: str, mes_padrao: str | None) -> ResultadoImporta
         mes = r.dados["mes"].dropna().iloc[0] if not r.dados.empty and r.dados["mes"].notna().any() else None
         r.emergencias = pd.concat(emerg, ignore_index=True)
         r.emergencias["mes"] = r.emergencias["mes"].fillna(mes or _mes_da_pagina(codigo) or mes_padrao)
+        r.emergencias = resumir_emergencias(r.emergencias)
         if r.dados.empty:
             r.avisos = []
     return r

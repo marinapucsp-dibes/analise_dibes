@@ -15,6 +15,7 @@ import pandas as pd
 from sqlalchemy import Column, Float, MetaData, String, Table, create_engine, delete, inspect, select, text
 from sqlalchemy.engine import Engine
 
+from . import importador
 from .config import CAMPOS
 
 ARQUIVO_PADRAO = Path(os.environ.get("DIBES_BANCO", Path(__file__).resolve().parent.parent / "dados" / "dibes.db"))
@@ -31,11 +32,12 @@ registros = Table(
     Column("importado_em", String(19)),
 )
 
-# Concessões em situações de emergência (enchentes, incêndios...), feitas pelo CPAS, fora das cotas das SAS
+# Concessões em situações de emergência (enchentes, incêndios...), feitas pelo CPAS, fora das cotas das SAS:
+# por mês, só o n.º de ocorrências e o de cestas
 emergencias = Table(
-    "emergencias", metadados,
+    "emergencias_mes", metadados,
     Column("mes", String(7), primary_key=True),
-    Column("ocorrencia", String(300), primary_key=True),
+    Column("ocorrencias", Float),
     Column("cestas", Float),
     Column("arquivo", String(500)),
     Column("importado_em", String(19)),
@@ -77,7 +79,23 @@ def _engine(url: str) -> Engine:
     if "sas" not in {c["name"] for c in inspect(engine).get_columns("registros")}:
         with engine.begin() as con:
             con.execute(text("ALTER TABLE registros ADD COLUMN sas VARCHAR(200)"))
+    _migrar_emergencias(engine)
     return engine
+
+
+def _migrar_emergencias(engine: Engine):
+    """A tabela antiga guardava uma linha por ocorrência (com o nome): passa a valer o resumo do mês."""
+    if "emergencias" not in inspect(engine).get_table_names():
+        return
+    with engine.begin() as con:
+        antigas = con.execute(text("SELECT mes, COUNT(*) AS n, SUM(cestas) AS cestas, MAX(arquivo) AS arquivo, "
+                                   "MAX(importado_em) AS em FROM emergencias GROUP BY mes")).all()
+        ja = {r[0] for r in con.execute(select(emergencias.c.mes))}
+        novas = [{"mes": m, "ocorrencias": float(n), "cestas": c, "arquivo": a, "importado_em": em}
+                 for m, n, c, a, em in antigas if m not in ja]
+        if novas:
+            con.execute(emergencias.insert(), novas)
+        con.execute(text("DROP TABLE emergencias"))
 
 
 def salvar(df: pd.DataFrame, arquivo: str = "", url: str | None = None, substituir_meses: bool = False,
@@ -127,30 +145,24 @@ def excluir_mes(mes: str, url: str | None = None) -> int:
 
 def salvar_emergencias(df: pd.DataFrame, arquivo: str = "", url: str | None = None,
                        meses: tuple[str, ...] = ()) -> int:
-    """Grava as emergências. A lista de cada mês é sempre completa: substitui a que existia nesse mês.
-    `meses` permite esvaziar um mês (ex.: todas as linhas apagadas na correção)."""
+    """Grava o n.º de ocorrências e de cestas de cada mês, substituindo o que havia nesse mês.
+    `meses` permite esvaziar um mês. Retorna quantos meses foram gravados."""
     agora = datetime.now().isoformat(timespec="seconds")
-    linhas = [{"mes": r.mes, "ocorrencia": str(r.ocorrencia).strip(), "arquivo": arquivo, "importado_em": agora,
+    resumo = importador.resumir_emergencias(df.dropna(subset=["mes"]))
+    linhas = [{"mes": r.mes, "arquivo": arquivo, "importado_em": agora,
+               "ocorrencias": None if pd.isna(r.ocorrencias) else float(r.ocorrencias),
                "cestas": None if pd.isna(r.cestas) else float(r.cestas)}
-              for r in df.itertuples(index=False) if str(r.ocorrencia).strip()]
-    # ocorrência repetida no mês: soma as cestas
-    unicas: dict = {}
-    for l in linhas:
-        chave = (l["mes"], l["ocorrencia"].upper())
-        if chave in unicas:
-            unicas[chave]["cestas"] = (unicas[chave]["cestas"] or 0) + (l["cestas"] or 0)
-        else:
-            unicas[chave] = l
+              for r in resumo.itertuples(index=False) if not (pd.isna(r.ocorrencias) and pd.isna(r.cestas))]
     with conectar(url).begin() as con:
-        for mes in set(meses) | {l["mes"] for l in unicas.values()}:
+        for mes in set(meses) | set(resumo["mes"]):
             con.execute(delete(emergencias).where(emergencias.c.mes == mes))
-        if unicas:
-            con.execute(emergencias.insert(), list(unicas.values()))
-    return len(unicas)
+        if linhas:
+            con.execute(emergencias.insert(), linhas)
+    return len(linhas)
 
 
 def carregar_emergencias(url: str | None = None) -> pd.DataFrame:
-    consulta = select(emergencias).order_by(emergencias.c.mes, emergencias.c.ocorrencia)
+    consulta = select(emergencias).order_by(emergencias.c.mes)
     with conectar(url).connect() as con:
         return pd.read_sql(consulta, con)
 

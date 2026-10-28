@@ -25,7 +25,7 @@ def test_quadro_anual_com_sistema_de_cestas_e_digitado(tmp_path):
     registros = pd.DataFrame([{"mes": "2026-01", "sas": "SAS X", "unidade": "SAS X", "tipo": "SAS",
                                "cota_disponivel": 1, "quantidade_solicitada": 1, "demanda_registrada": 1,
                                "atendimento_social": 1, "recibos_emitidos": 1, "cestas_concedidas": 5298}])
-    emerg = pd.DataFrame({"mes": ["2026-01"], "ocorrencia": ["ENCHENTE"], "cestas": [199.0]})
+    emerg = pd.DataFrame({"mes": ["2026-01"], "ocorrencias": [1.0], "cestas": [199.0]})
     base = anual.lancamentos(banco.carregar_atividades(caminho), anual.cestas_do_sistema(registros, emerg))
     q = anual.quadro_anual(base, "2026").set_index(["atividade", "indicador"])
 

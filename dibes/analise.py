@@ -309,4 +309,4 @@ def emergencias_por_mes(emerg: pd.DataFrame) -> pd.DataFrame:
     if emerg.empty:
         return pd.DataFrame(columns=["mes", "cestas", "ocorrencias"])
     return (emerg.groupby("mes", as_index=False)
-            .agg(cestas=("cestas", "sum"), ocorrencias=("ocorrencia", "count")).sort_values("mes"))
+            .agg(cestas=("cestas", "sum"), ocorrencias=("ocorrencias", "sum")).sort_values("mes"))

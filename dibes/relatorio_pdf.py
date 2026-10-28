@@ -260,7 +260,7 @@ def gerar_pdf(df: pd.DataFrame, mes: str, emergencias: pd.DataFrame | None = Non
 
     # Emergências
     if emergencias is not None and not emergencias.empty:
-        e_mes = emergencias[emergencias["mes"] == mes].sort_values("cestas", ascending=False)
+        e_mes = emergencias[emergencias["mes"] == mes]
         recentes_e = analise.emergencias_por_mes(emergencias[emergencias["mes"].isin(meses[-meses_historico:])])
         if not e_mes.empty or not recentes_e.empty:
             bloco = [Paragraph(f"{next(secao)}. Emergências — {rotulo_mes(mes)}", SECAO),
@@ -270,13 +270,12 @@ def gerar_pdf(df: pd.DataFrame, mes: str, emergencias: pd.DataFrame | None = Non
             if e_mes.empty:
                 bloco.append(Paragraph("Nenhuma emergência registrada no mês.", TEXTO))
             else:
-                linhas = [["Localidade / Ocorrência", "Qtd. de Cestas"]]
-                linhas += [[Paragraph(r.ocorrencia, CELULA), num(r.cestas)] for r in e_mes.itertuples()]
-                linhas.append(["Total", num(e_mes["cestas"].sum())])
-                bloco.append(tabela(linhas, [12 * cm, 3.5 * cm], (len(linhas) - 1,)))
+                linhas = [["N.º de ocorrências", "N.º de cestas concedidas"],
+                          [num(e_mes["ocorrencias"].sum()), num(e_mes["cestas"].sum())]]
+                bloco.append(tabela(linhas, [5 * cm, 5 * cm]))
             if len(recentes_e) > 1:
-                linhas = [["Mês", "Cestas", "Ocorrências"]]
-                linhas += [[rotulo_mes(r.mes), num(r.cestas), num(r.ocorrencias)] for r in recentes_e.itertuples()]
+                linhas = [["Mês", "Ocorrências", "Cestas"]]
+                linhas += [[rotulo_mes(r.mes), num(r.ocorrencias), num(r.cestas)] for r in recentes_e.itertuples()]
                 bloco += [Spacer(1, 8), Paragraph("Emergências mês a mês", TEXTO),
                           tabela(linhas, [3.5 * cm, 3 * cm, 3 * cm])]
             corpo.append(PageBreak())

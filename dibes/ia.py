@@ -115,12 +115,11 @@ def montar_contexto(df: pd.DataFrame, meses: str | list[str], emergencias: pd.Da
     und = und.assign(mes=und["mes"].map(rotulo_mes))
     partes.append("## Unidades por mês\n" + _csv(und, colunas_und))
     if emergencias is not None and not emergencias.empty:
-        e = emergencias[emergencias["mes"].isin(meses)].sort_values(["mes", "cestas"], ascending=[True, False])
+        e = emergencias[emergencias["mes"].isin(meses)].sort_values("mes")
         if not e.empty:
             partes.append("## Emergências (CPAS)\n" + e.assign(mes=e["mes"].map(rotulo_mes))
-                          .rename(columns={"mes": "Mês", "ocorrencia": "Localidade/Ocorrência",
-                                           "cestas": "Cestas"})[["Mês", "Localidade/Ocorrência", "Cestas"]]
-                          .to_csv(index=False, sep=";"))
+                          .rename(columns={"mes": "Mês", "ocorrencias": "Ocorrências", "cestas": "Cestas"})
+                          [["Mês", "Ocorrências", "Cestas"]].to_csv(index=False, sep=";"))
     # alertas detalhados do último mês; nos demais, só a contagem por regra
     alertas = analise.alertas(df, ultimo)
     alertas = alertas[alertas["Gravidade"] != "Informativo"]

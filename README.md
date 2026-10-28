@@ -101,13 +101,16 @@ O sistema localiza sozinho a linha de cabeçalho e reconhece variações de nome
 ## Emergências
 
 Concessões do Auxílio Alimentação em situações de emergência (enchentes, incêndios, desabamentos…),
-realizadas pelo CPAS, por **localidade/ocorrência**. Ficam separadas dos totais das SAS.
+realizadas pelo CPAS. Por mês, guarda-se só o **n.º de ocorrências** e o **n.º de cestas concedidas**
+(sem os nomes das ocorrências). Ficam separadas dos totais das SAS.
 
-- **Junto com o painel HTML:** a tabela "Emergências" do painel mensal é lida automaticamente.
+- **Junto com o painel HTML:** a tabela "Emergências" do painel mensal é lida automaticamente; cada linha
+  conta uma ocorrência e as cestas são somadas.
 - **Lançar ou corrigir qualquer mês:** *Importar dados → 🚨 Emergências* — escolha o mês no seletor do topo,
-  edite a tabela e salve (a lista do mês substitui a anterior).
+  preencha os dois números e salve (substituem os anteriores do mês).
 - **Vários meses de uma vez:** importe na aba *Arquivo* uma planilha (Excel/CSV) com as colunas **Mês**,
-  **Localidade / Ocorrência** e **Qtd. de Cestas**.
+  **N.º de ocorrências** e **N.º de cestas concedidas** (a lista antiga, com **Localidade / Ocorrência** e
+  **Qtd. de Cestas**, também é aceita e vira o resumo do mês).
 
 Aparecem no Painel do mês, na Evolução mensal, no PDF, no Excel e na análise por IA.
 

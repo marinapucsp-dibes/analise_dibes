@@ -377,9 +377,8 @@ def test_emergencias_no_html_junto_com_o_painel():
     codigo = PAINEL_JS.replace("</body>", EMERGENCIAS_HTML.split("<body>")[1].split("</body>")[0] + "</body>")
     r = importador.finalizar(importador.importar_html_colado(codigo))
     assert not r.avisos and len(r.dados) == 10
-    e = r.emergencias.set_index("ocorrencia")
-    assert e["cestas"].to_dict() == {"ITAIM PAULISTA": 3, "CCOI SIG 37646809": 130}  # sem a linha TOTAL
-    assert set(e["mes"]) == {"2026-03"}  # mês do painel
+    # sem os nomes e sem a linha TOTAL: só o resumo do mês do painel
+    assert r.emergencias.to_dict("records") == [{"mes": "2026-03", "ocorrencias": 2, "cestas": 133}]
 
 
 def test_emergencias_de_varios_meses_por_planilha_e_banco(tmp_path):
@@ -392,20 +391,46 @@ def test_emergencias_de_varios_meses_por_planilha_e_banco(tmp_path):
     assert r.dados.empty and not r.avisos  # planilha só de emergências não gera aviso
     assert r.emergencias.groupby("mes")["cestas"].sum().to_dict() == {"2026-03": 45, "2026-04": 12}
 
+    assert r.emergencias.set_index("mes")["ocorrencias"].to_dict() == {"2026-03": 2, "2026-04": 1}
+
     caminho = tmp_path / "t.db"
     banco.salvar_emergencias(r.emergencias, "planilha", caminho)
-    # nova lista de março substitui a anterior; abril fica como estava
-    banco.salvar_emergencias(pd.DataFrame({"mes": ["2026-03"], "ocorrencia": ["ENCHENTE ZONA LESTE"],
-                                           "cestas": [42]}), "correção", caminho)
-    e = banco.carregar_emergencias(caminho)
-    assert e.groupby("mes")["cestas"].sum().to_dict() == {"2026-03": 42, "2026-04": 12}
-    # apagar todas as linhas de um mês na correção esvazia o mês
-    banco.salvar_emergencias(pd.DataFrame(columns=["mes", "ocorrencia", "cestas"]), "correção", caminho,
-                             meses=("2026-04",))
+    # novos números de março substituem os anteriores; abril fica como estava
+    banco.salvar_emergencias(pd.DataFrame({"mes": ["2026-03"], "ocorrencias": [3], "cestas": [42]}), "correção",
+                             caminho)
+    e = banco.carregar_emergencias(caminho).set_index("mes")
+    assert e["cestas"].to_dict() == {"2026-03": 42, "2026-04": 12}
+    assert e["ocorrencias"].to_dict() == {"2026-03": 3, "2026-04": 1}
+    # mês sem valores na correção é esvaziado
+    banco.salvar_emergencias(pd.DataFrame({"mes": ["2026-04"], "ocorrencias": [None], "cestas": [None]}),
+                             "correção", caminho, meses=("2026-04",))
     assert set(banco.carregar_emergencias(caminho)["mes"]) == {"2026-03"}
     # excluir o mês apaga também as emergências
     banco.excluir_mes("2026-03", caminho)
     assert banco.carregar_emergencias(caminho).empty
+
+
+def test_emergencias_resumo_mensal_por_planilha(tmp_path):
+    planilha = pd.DataFrame({"Mês": ["Jan/2026", "Fev/2026", "Total"], "N.º de ocorrências": [4, 2, 6],
+                             "N.º de cestas concedidas": [300, 85, 385]})
+    xlsx = tmp_path / "resumo.xlsx"
+    planilha.to_excel(xlsx, index=False)
+    r = importador.finalizar(importador.importar_arquivo(xlsx.read_bytes(), "resumo.xlsx"))
+    assert r.emergencias.to_dict("records") == [{"mes": "2026-01", "ocorrencias": 4, "cestas": 300},
+                                                {"mes": "2026-02", "ocorrencias": 2, "cestas": 85}]
+
+
+def test_emergencias_antigas_com_nomes_viram_resumo(tmp_path):
+    from sqlalchemy import create_engine, text
+    caminho = tmp_path / "antigo.db"
+    with create_engine(f"sqlite:///{caminho}").begin() as con:
+        con.execute(text("CREATE TABLE emergencias (mes VARCHAR(7), ocorrencia VARCHAR(300), cestas FLOAT, "
+                         "arquivo VARCHAR(500), importado_em VARCHAR(19), PRIMARY KEY (mes, ocorrencia))"))
+        con.execute(text("INSERT INTO emergencias VALUES ('2026-08', 'ITAIM', 3, 'x', ''), "
+                         "('2026-08', 'CCOI', 130, 'x', ''), ('2026-09', 'SÉ', 10, 'x', '')"))
+    e = banco.carregar_emergencias(str(caminho))
+    assert e[["mes", "ocorrencias", "cestas"]].to_dict("records") == [
+        {"mes": "2026-08", "ocorrencias": 2, "cestas": 133}, {"mes": "2026-09", "ocorrencias": 1, "cestas": 10}]
 
 
 def test_nome_que_junta_duas_unidades_nao_e_unido():
