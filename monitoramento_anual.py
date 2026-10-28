@@ -91,13 +91,22 @@ def pagina_painel():
         return total.get((atividade, rotulo))
 
     A, P = anual.ALIMENTACAO, anual.PASSAGENS
+    def reais(coluna, rotulo, valor):
+        coluna.metric(rotulo, fmt_reais_curto(valor), border=True, help=f"Valor exato: {fmt_reais(valor)}")
+
+    st.markdown(f"**🧺 {A}**")
     c = st.columns(4)
     c[0].metric("Cestas concedidas (SAS + emergências)", fmt(t(A, "Total de cestas concedidas")), border=True)
     c[1].metric("Cestas compradas", fmt(t(A, "Cestas compradas")), border=True)
-    c[2].metric("Passagens compradas", fmt(t(P, "Passagens compradas")), border=True)
-    gasto = pd.Series([t(A, "Valor gasto com cestas"), t(P, "Valor gasto com passagens")]).sum(min_count=1)
-    c[3].metric("Valor gasto (cestas + passagens)", fmt_reais_curto(gasto), border=True,
-                help=f"Total exato: {fmt_reais(gasto)}")
+    reais(c[2], "Valor gasto com cestas", t(A, "Valor gasto com cestas"))
+    reais(c[3], "Custo médio por cesta", t(A, "Custo médio por cesta comprada"))
+    st.markdown(f"**🚌 {P}**")
+    c = st.columns(4)
+    c[0].metric("Solicitações atendidas", fmt(t(P, "Solicitações atendidas")), border=True)
+    c[1].metric("Passagens compradas", fmt(t(P, "Passagens compradas")), border=True)
+    reais(c[2], "Valor gasto com passagens", t(P, "Valor gasto com passagens"))
+    reais(c[3], "Custo médio por passagem", t(P, "Custo médio por passagem"))
+    st.markdown("**📨 Demais atividades**")
     c = st.columns(4)
     c[0].metric("Protocolos SIGRC respondidos", fmt(t(anual.SIGRC, "Protocolos respondidos")), border=True)
     c[1].metric("Processos SEI respondidos", fmt(t(anual.SEI, "Processos SEI respondidos")), border=True)
